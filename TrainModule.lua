@@ -78,15 +78,16 @@ function TrainModule.Init(State: any, Toggles: any)
 		PathModule = pm
 	end
 
-	local function getChar(): (Model, Humanoid, BasePart)
+	-- Fixed Return Type Signature
+	local function getChar(): (Model?, Humanoid?, BasePart?)
 		local char = localPlayer.Character
-		if not char then return nil end
+		if not char then return nil, nil, nil end
 		local hum = char:FindFirstChildOfClass("Humanoid")
 		local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
 		if hum and root then
 			return char, hum, root
 		end
-		return nil
+		return nil, nil, nil
 	end
 
 	-- Checks player's Yen / Money value
@@ -197,9 +198,8 @@ function TrainModule.Init(State: any, Toggles: any)
 
 	function Module.UnequipAllTools()
 		Module.VerifyMacroDisabled()
-		local res = getChar()
-		if res then
-			local _, hum, _ = res
+		local char, hum, root = getChar()
+		if char and hum then
 			pcall(function() hum:UnequipTools() end)
 			task.wait(0.3)
 		end
@@ -282,11 +282,9 @@ function TrainModule.Init(State: any, Toggles: any)
 
 		if Module.IsFoodEquipped() then return true end
 
-		local res = getChar()
+		local char, hum, _ = getChar()
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		if not backpack or not res then return false end
-
-		local char, hum, _ = res
+		if not backpack or not char or not hum then return false end
 
 		for attempt = 1, 3 do
 			Module.VerifyMacroDisabled()
@@ -312,11 +310,10 @@ function TrainModule.Init(State: any, Toggles: any)
 			return false
 		end
 
-		local char = localPlayer.Character
+		local char, hum, _ = getChar()
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		local res = getChar()
 
-		if not char or not res then return false end
+		if not char then return false end
 
 		for _, tool in ipairs(char:GetChildren()) do
 			if tool:IsA("Tool") and tool.Name == "Sleeping Bag" then
