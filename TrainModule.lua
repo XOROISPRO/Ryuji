@@ -78,7 +78,7 @@ function TrainModule.Init(State: any, Toggles: any)
 		PathModule = pm
 	end
 
-	local function getChar(): (Model, Humanoid, BasePart)?
+	local function getChar(): (Model, Humanoid, BasePart)
 		local char = localPlayer.Character
 		if not char then return nil end
 		local hum = char:FindFirstChildOfClass("Humanoid")
