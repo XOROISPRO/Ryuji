@@ -78,7 +78,6 @@ function TrainModule.Init(State: any, Toggles: any)
 		PathModule = pm
 	end
 
-	-- Fixed Return Type Signature
 	local function getChar(): (Model?, Humanoid?, BasePart?)
 		local char = localPlayer.Character
 		if not char then return nil, nil, nil end
@@ -441,7 +440,7 @@ function TrainModule.Init(State: any, Toggles: any)
 			PathModule.StopPathfinding()
 		end
 
-		if Toggles and Toggles.AutoTrainToggle then
+		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
 			Toggles.AutoTrainToggle:SetValue(false)
 		end
 
@@ -458,7 +457,7 @@ function TrainModule.Init(State: any, Toggles: any)
 		State.AutoTrain = true
 		Module.SetupDeathConnection()
 
-		if Toggles and Toggles.AutoTrainToggle then
+		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
 			Toggles.AutoTrainToggle:SetValue(true)
 		end
 
