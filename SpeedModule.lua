@@ -235,14 +235,15 @@ function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, speedUseUIL
 	connections["Input"] = UserInputService.InputBegan:Connect(function(i, gpe)
 		if gpe then return end
 		local altHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
-		local ctrlHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
 
+		-- Full Cleanup Hotkey (Alt + Right Shift)
 		if altHeld and i.KeyCode == Enum.KeyCode.RightShift then
 			Module.Destroy()
 			return
 		end
 
-		if altHeld and ctrlHeld then
+		-- Master Speed Toggle Hotkey (Alt + Mouse Button 5)
+		if altHeld and i.UserInputType == Enum.UserInputType.MouseButton5 then
 			scriptEnabled = not scriptEnabled
 			if not scriptEnabled then
 				lastSpeedMode = speedMode
@@ -257,6 +258,7 @@ function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, speedUseUIL
 			return
 		end
 
+		-- Speed Mode Hotkeys
 		if altHeld then
 			if i.KeyCode == Enum.KeyCode.X then
 				speedMode = (speedMode == "fast") and "normal" or "fast"
