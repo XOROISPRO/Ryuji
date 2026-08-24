@@ -13,8 +13,6 @@ function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, speedUseUIL
 	local Module = {}
 	
 	-- SPECIFIC VARIABLE CHECK
-	-- If speedUseUILibrary is explicitly passed, use its boolean value.
-	-- Fallback to checking if Library exists if left nil.
 	local activeUI = if speedUseUILibrary ~= nil then speedUseUILibrary else (Library ~= nil)
 
 	-- State Variables
@@ -235,15 +233,16 @@ function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, speedUseUIL
 	connections["Input"] = UserInputService.InputBegan:Connect(function(i, gpe)
 		if gpe then return end
 		local altHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInputService:IsKeyDown(Enum.KeyCode.RightAlt)
+		local ctrlHeld = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
 
-		-- Full Cleanup Hotkey (Alt + Right Shift)
+		-- Full Cleanup Hotkey
 		if altHeld and i.KeyCode == Enum.KeyCode.RightShift then
 			Module.Destroy()
 			return
 		end
 
-		-- Master Speed Toggle Hotkey (Alt + Mouse Button 5)
-		if altHeld and i.UserInputType == Enum.UserInputType.MouseButton5 then
+		-- Master Toggle Hotkey (Alt + Ctrl)
+		if altHeld and ctrlHeld then
 			scriptEnabled = not scriptEnabled
 			if not scriptEnabled then
 				lastSpeedMode = speedMode
