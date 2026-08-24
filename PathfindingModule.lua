@@ -99,6 +99,7 @@ function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any)
 
 	function Module.NavigateToCFrame(targetCFrame: CFrame, onArrivalCallback: (() -> ())?)
 		Module.StopPathfinding()
+		TrainModule.EnsureMacroState(false)
 		TrainModule.UnequipAllTools()
 		State.Navigating = true
 		if Toggles and Toggles.NavToggle then Toggles.NavToggle:SetValue(true) end
@@ -138,7 +139,9 @@ function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any)
 
 		State.Connections["Heartbeat"] = RunService.Heartbeat:Connect(function(dt)
 			if not State.Navigating then return end
-			TrainModule.EnsureMacroDisabled()
+			
+			-- OPERATION: MOVEMENT (Strict Macro Lock)
+			TrainModule.EnsureMacroState(false)
 
 			if currentWaypointIndex > #waypoints then
 				releaseAllKeys()
