@@ -30,6 +30,50 @@ function TrainModule.Init(State: any, Toggles: any)
 	local Module = {}
 	local PathModule: any = nil
 
+	-- Checks if macro attribute is explicitly false or nil
+	function Module.IsMacroDisabled(): boolean
+		local attr = localPlayer:GetAttribute("autoMacro")
+		return attr == false or attr == nil
+	end
+
+	-- Forcefully disables macro and waits until the state is verified false/nil
+	function Module.VerifyMacroDisabled(): boolean
+		State.MacroActive = false
+
+		for attempt = 1, 5 do
+			localPlayer:SetAttribute("autoMacro", false)
+
+			pcall(function()
+				macroScript:SetAttribute("AutoUseVests", false)
+				macroScript:SetAttribute("AutoUseMask", false)
+			end)
+
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
+			task.wait(0.1)
+
+			if Module.IsMacroDisabled() then
+				return true
+			end
+		end
+
+		return Module.IsMacroDisabled()
+	end
+
+	-- Sets active state strictly for training
+	function Module.SetMacroActive(enabled: boolean)
+		if enabled then
+			State.MacroActive = true
+			localPlayer:SetAttribute("autoMacro", true)
+			pcall(function()
+				macroScript:SetAttribute("AutoUseVests", true)
+				macroScript:SetAttribute("AutoUseMask", true)
+			end)
+		else
+			Module.VerifyMacroDisabled()
+		end
+	end
+
 	function Module.SetPathModule(pm: any)
 		PathModule = pm
 	end
@@ -56,7 +100,6 @@ function TrainModule.Init(State: any, Toggles: any)
 			return moneyAttr
 		end
 
-		-- Fallback Leaderstats check
 		local leaderstats = localPlayer:FindFirstChild("leaderstats")
 		if leaderstats then
 			local yenVal = leaderstats:FindFirstChild("Yen") or leaderstats:FindFirstChild("Money")
@@ -105,7 +148,6 @@ function TrainModule.Init(State: any, Toggles: any)
 
 	-- Kick Safety Checks Handler
 	function Module.CheckKickConditions(): boolean
-		-- 1. Check Death State
 		if Module.IsDead() then
 			local msg = "[AutoTrain Kick] Character died."
 			warn(msg)
@@ -113,7 +155,6 @@ function TrainModule.Init(State: any, Toggles: any)
 			return true
 		end
 
-		-- 2. Check Required Tools
 		local hasTools, missingTool = Module.HasRequiredTrainingTools()
 		if not hasTools then
 			local msg = string.format("[AutoTrain Kick] Missing required training tool: '%s'", tostring(missingTool))
@@ -122,7 +163,6 @@ function TrainModule.Init(State: any, Toggles: any)
 			return true
 		end
 
-		-- 3. Check Money Balance
 		local currentMoney = Module.GetPlayerMoney()
 		if currentMoney <= MIN_MONEY_LIMIT then
 			local msg = string.format("[AutoTrain Kick] Money is too low ($%d <= $%d)", currentMoney, MIN_MONEY_LIMIT)
@@ -152,50 +192,6 @@ function TrainModule.Init(State: any, Toggles: any)
 					localPlayer:Kick(msg)
 				end
 			end)
-		end
-	end
-
-	-- Checks if macro attribute is explicitly false or nil
-	function Module.IsMacroDisabled(): boolean
-		local attr = localPlayer:GetAttribute("autoMacro")
-		return attr == false or attr == nil
-	end
-
-	-- Forcefully disables macro and waits until the state is verified false/nil
-	function Module.VerifyMacroDisabled(): boolean
-		State.MacroActive = false
-
-		for attempt = 1, 5 do
-			localPlayer:SetAttribute("autoMacro", false)
-
-			pcall(function()
-				macroScript:SetAttribute("AutoUseVests", false)
-				macroScript:SetAttribute("AutoUseMask", false)
-			end)
-
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-
-			task.wait(0.1)
-
-			if Module.IsMacroDisabled() then
-				return true
-			end
-		end
-
-		return Module.IsMacroDisabled()
-	end
-
-	-- Sets active state strictly for training
-	function Module.SetMacroActive(enabled: boolean)
-		if enabled then
-			State.MacroActive = true
-			localPlayer:SetAttribute("autoMacro", true)
-			pcall(function()
-				macroScript:SetAttribute("AutoUseVests", true)
-				macroScript:SetAttribute("AutoUseMask", true)
-			end)
-		else
-			Module.VerifyMacroDisabled()
 		end
 	end
 
@@ -458,7 +454,6 @@ function TrainModule.Init(State: any, Toggles: any)
 	function Module.StartAutoTrain()
 		Module.StopAutoTrain()
 
-		-- PRE-CHECK: KICK IMMEDIATELY IF DEAD OR REQUIREMENTS ARE NOT MET
 		if Module.CheckKickConditions() then
 			return
 		end
@@ -488,7 +483,6 @@ function TrainModule.Init(State: any, Toggles: any)
 				task.wait(1)
 				if not State.AutoTrain then break end
 
-				-- CONTINUOUS SAFETY CHECK
 				if Module.CheckKickConditions() then
 					break
 				end
