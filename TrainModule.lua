@@ -399,7 +399,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 		warn("[Restock] Remote buy ineffective. Navigating to vendor...")
 		local reachedVendor = false
-		if PathModule then
+		if PathModule and typeof(PathModule) == "table" and typeof(PathModule.NavigateToCFrame) == "function" then
 			PathModule.NavigateToCFrame(PathModule.TARGET_CFRAME, function()
 				reachedVendor = true
 			end)
@@ -411,37 +411,44 @@ function TrainModule.Init(State: any, Toggles: any)
 			task.wait(0.5)
 			timeout += 0.5
 			if timeout >= 20 then
-				if PathModule then PathModule.StopPathfinding() end
+				if PathModule and typeof(PathModule) == "table" and typeof(PathModule.StopPathfinding) == "function" then
+					PathModule.StopPathfinding() 
+				end
 				break
 			end
 		until reachedVendor or not State.AutoTrain
 	end
 
 	function Module.StopAutoTrain()
-		State.AutoTrain = false
+		if State then
+			State.AutoTrain = false
+		end
+		
 		Module.VerifyMacroDisabled()
 
-		if State.DeathConnection then
-			State.DeathConnection:Disconnect()
-			State.DeathConnection = nil
+		if State then
+			if State.DeathConnection then
+				State.DeathConnection:Disconnect()
+				State.DeathConnection = nil
+			end
+
+			if State.TrainThread then
+				task.cancel(State.TrainThread)
+				State.TrainThread = nil
+			end
+
+			if State.AntiAfkThread then
+				task.cancel(State.AntiAfkThread)
+				State.AntiAfkThread = nil
+			end
 		end
 
-		if State.TrainThread then
-			task.cancel(State.TrainThread)
-			State.TrainThread = nil
-		end
-
-		if State.AntiAfkThread then
-			task.cancel(State.AntiAfkThread)
-			State.AntiAfkThread = nil
-		end
-
-		if PathModule then
-			PathModule.StopPathfinding()
+		if PathModule and typeof(PathModule) == "table" and typeof(PathModule.StopPathfinding) == "function" then
+			pcall(function() PathModule.StopPathfinding() end)
 		end
 
 		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
-			Toggles.AutoTrainToggle:SetValue(false)
+			pcall(function() Toggles.AutoTrainToggle:SetValue(false) end)
 		end
 
 		print("[AutoTrain] System Stopped.")
@@ -458,11 +465,11 @@ function TrainModule.Init(State: any, Toggles: any)
 		Module.SetupDeathConnection()
 
 		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
-			Toggles.AutoTrainToggle:SetValue(true)
+			pcall(function() Toggles.AutoTrainToggle:SetValue(true) end)
 		end
 
 		State.AntiAfkThread = task.spawn(function()
-			while State.AutoTrain do
+			while State and State.AutoTrain do
 				task.wait(300)
 				if State.AutoTrain then
 					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
@@ -475,7 +482,7 @@ function TrainModule.Init(State: any, Toggles: any)
 		State.TrainThread = task.spawn(function()
 			print("[AutoTrain] Initialized.")
 
-			while State.AutoTrain do
+			while State and State.AutoTrain do
 				task.wait(1)
 				if not State.AutoTrain then break end
 
