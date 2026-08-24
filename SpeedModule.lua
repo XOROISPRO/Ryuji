@@ -9,13 +9,13 @@ local gui = localPlayer:WaitForChild("PlayerGui")
 
 local SpeedModule = {}
 
-function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, useUILibrary: boolean?)
+function SpeedModule.Init(State: any?, Library: any?, Toggles: any?, speedUseUILibrary: boolean?)
 	local Module = {}
 	
-	-- MAINLOADER VARIABLE CHECK
-	-- If useUILibrary is explicitly provided as a boolean, use it.
-	-- Otherwise, check if Library is available.
-	local activeUI = if useUILibrary ~= nil then useUILibrary else (Library ~= nil)
+	-- SPECIFIC VARIABLE CHECK
+	-- If speedUseUILibrary is explicitly passed, use its boolean value.
+	-- Fallback to checking if Library exists if left nil.
+	local activeUI = if speedUseUILibrary ~= nil then speedUseUILibrary else (Library ~= nil)
 
 	-- State Variables
 	local scriptEnabled = true
