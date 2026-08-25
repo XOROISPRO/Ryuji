@@ -1,38 +1,35 @@
 --!strict
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PathfindingService = game:GetService("PathfindingService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 
 local localPlayer = Players.LocalPlayer
-local playerGui = localPlayer:WaitForChild("PlayerGui")
-local macroScript = ReplicatedStorage:WaitForChild("Modules")
-	:WaitForChild("Client")
-	:WaitForChild("Main")
-	:WaitForChild("Core2")
-	:WaitForChild("macro")
+local camera = Workspace.CurrentCamera
 
-local TrainModule = {}
+local PathfindingModule = {}
 
 -- Constants
-local FOOD_ITEMS = { "Boba Tea", "Coffee", "Steak", "Dango" }
-local REQUIRED_TRAINING_TOOLS = { "Jumping Rope", "One Hand Pushups" }
-local MIN_MONEY_LIMIT = 1000
+local TARGET_CFRAME = CFrame.new(
+	665.411133, 101.890839, -898.212219,
+	0.712382495, 5.50751338e-08, -0.701791406,
+	-8.13938499e-08, 1, -4.14428092e-09,
+	0.701791406, 6.00738161e-08, 0.712382495
+)
 
-local MAX_STEAK_TARGET = 11
-local MIN_STEAK_THRESHOLD = 10
-local MIN_HUNGER_THRESHOLD = 25
-local MIN_EAT_TARGET = 70
-local MAX_FATIGUE_THRESHOLD = 80
-local MIN_FATIGUE_TARGET = 0
+local PATH_PARAMS = {
+	AgentRadius = 3.5,
+	AgentHeight = 5.5,
+	AgentCanJump = true,
+	WaypointSpacing = 4,
+}
 
-function TrainModule.Init(State: any, Toggles: any)
+local PHYSICS_CFG = { targetSpeed = 55, groundAccel = 30, friction = 4, stopSpeed = 5 }
+local DEFAULT_WALKSPEED = 16
+
+function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any)
 	local Module = {}
-	local PathModule: any = nil
-
-	function Module.SetPathModule(pm: any)
-		PathModule = pm
-	end
 
 	local function getChar(): (Model, Humanoid, BasePart)
 		local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
@@ -41,541 +38,167 @@ function TrainModule.Init(State: any, Toggles: any)
 		return char, hum, root
 	end
 
-	-- Checks player's Yen / Money value
-	function Module.GetPlayerMoney(): number
-		local moneyAttr = localPlayer:GetAttribute("Yen") 
-			or localPlayer:GetAttribute("Money") 
-			or localPlayer:GetAttribute("yen") 
-			or localPlayer:GetAttribute("money")
+	local function setKeyState(keyCode: Enum.KeyCode, press: boolean)
+		if State.ActiveKeys[keyCode] == press then return end
+		State.ActiveKeys[keyCode] = press
+		VirtualInputManager:SendKeyEvent(press, keyCode, false, game)
+	end
 
-		if moneyAttr and type(moneyAttr) == "number" then
-			return moneyAttr
-		end
-
-		-- Fallback Leaderstats check
-		local leaderstats = localPlayer:FindFirstChild("leaderstats")
-		if leaderstats then
-			local yenVal = leaderstats:FindFirstChild("Yen") or leaderstats:FindFirstChild("Money")
-			if yenVal and yenVal:IsA("ValueBase") then
-				return tonumber(yenVal.Value) or 0
+	local function releaseAllKeys()
+		for key, isPressed in pairs(State.ActiveKeys) do
+			if isPressed then
+				VirtualInputManager:SendKeyEvent(false, key, false, game)
+				State.ActiveKeys[key] = false
 			end
 		end
-
-		return 0
 	end
 
-	-- Checks if player has both Jumping Rope and One Hand Pushups
-	function Module.HasRequiredTrainingTools(): (boolean, string?)
-		local char = localPlayer.Character
-		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		
-		for _, requiredTool in ipairs(REQUIRED_TRAINING_TOOLS) do
-			local found = false
-
-			if char and char:FindFirstChild(requiredTool) then
-				found = true
-			elseif backpack and backpack:FindFirstChild(requiredTool) then
-				found = true
-			end
-
-			if not found then
-				return false, requiredTool
-			end
+	local function applyFriction(dt: number)
+		local speed = State.Velocity.Magnitude
+		if speed < 0.1 then
+			State.Velocity = Vector3.zero
+			return
 		end
-
-		return true, nil
-	end
-
-	-- Kick Safety Checks Handler
-	function Module.CheckKickConditions()
-		-- 1. Check Required Tools
-		local hasTools, missingTool = Module.HasRequiredTrainingTools()
-		if not hasTools then
-			local msg = string.format("[AutoTrain Kick] Missing required training tool: '%s'", tostring(missingTool))
-			warn(msg)
-			localPlayer:Kick(msg)
-			return true
-		end
-
-		-- 2. Check Money Balance
-		local currentMoney = Module.GetPlayerMoney()
-		if currentMoney <= MIN_MONEY_LIMIT then
-			local msg = string.format("[AutoTrain Kick] Money is too low ($%d <= $%d)", currentMoney, MIN_MONEY_LIMIT)
-			warn(msg)
-			localPlayer:Kick(msg)
-			return true
-		end
-
-		return false
-	end
-
-	-- Checks if macro attribute is explicitly false or nil
-	function Module.IsMacroDisabled(): boolean
-		local attr = localPlayer:GetAttribute("autoMacro")
-		return attr == false or attr == nil
-	end
-
-	-- Forcefully disables macro and waits until the state is verified false/nil
-	function Module.VerifyMacroDisabled(): boolean
-		State.MacroActive = false
-
-		for attempt = 1, 5 do
-			localPlayer:SetAttribute("autoMacro", false)
-
-			pcall(function()
-				macroScript:SetAttribute("AutoUseVests", false)
-				macroScript:SetAttribute("AutoUseMask", false)
-			end)
-
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-
-			task.wait(0.1)
-
-			if Module.IsMacroDisabled() then
-				return true
-			end
-		end
-
-		return Module.IsMacroDisabled()
-	end
-
-	-- Sets active state strictly for training
-	function Module.SetMacroActive(enabled: boolean)
-		if enabled then
-			State.MacroActive = true
-			localPlayer:SetAttribute("autoMacro", true)
-			pcall(function()
-				macroScript:SetAttribute("AutoUseVests", true)
-				macroScript:SetAttribute("AutoUseMask", true)
-			end)
-		else
-			Module.VerifyMacroDisabled()
+		local control = math.max(speed, PHYSICS_CFG.stopSpeed)
+		local drop = control * PHYSICS_CFG.friction * dt
+		local newSpeed = math.max(speed - drop, 0)
+		if newSpeed ~= speed then
+			State.Velocity = State.Velocity * (newSpeed / speed)
 		end
 	end
 
-	function Module.UnequipAllTools()
-		Module.VerifyMacroDisabled()
-		local _, hum, _ = getChar()
+	local function accel(wishDir: Vector3, wishSpeed: number, dt: number)
+		local cur = State.Velocity:Dot(wishDir)
+		local add = wishSpeed - cur
+		if add <= 0 then return end
+		local accelSpeed = math.min(PHYSICS_CFG.groundAccel * dt * wishSpeed, add)
+		State.Velocity = State.Velocity + (wishDir * accelSpeed)
+	end
+
+	function Module.StopPathfinding()
+		State.Navigating = false
+		releaseAllKeys()
+		State.Velocity = Vector3.zero
+		local _, hum, root = getChar()
+		if root then
+			root.AssemblyLinearVelocity = Vector3.zero
+		end
 		if hum then
-			pcall(function() hum:UnequipTools() end)
-			task.wait(0.3)
+			hum.PlatformStand = false
+			hum.WalkSpeed = DEFAULT_WALKSPEED
+		end
+		for key, conn in pairs(State.Connections) do
+			conn:Disconnect()
+			State.Connections[key] = nil
+		end
+		
+		if Toggles and Toggles.NavToggle then
+			Toggles.NavToggle:SetValue(false)
 		end
 	end
 
-	function Module.GetHungerPercent(): number?
-		local attrHunger = localPlayer:GetAttribute("Hunger") or localPlayer:GetAttribute("hunger")
-		if attrHunger and type(attrHunger) == "number" then return attrHunger end
+	function Module.NavigateToCFrame(targetCFrame: CFrame, onArrivalCallback: (() -> ())?)
+		Module.StopPathfinding()
+		TrainModule.EnsureMacroState(false)
+		TrainModule.UnequipAllTools()
+		State.Navigating = true
+		if Toggles and Toggles.NavToggle then Toggles.NavToggle:SetValue(true) end
 
-		local success, text = pcall(function()
-			return playerGui.HUD.Bars.MainHUD.HungerDisplay.Text
-		end)
-		if success and text then
-			local rawNum = string.match(text, "%d+")
-			if rawNum then return tonumber(rawNum) end
-		end
-		return nil
-	end
+		local _, humanoid, root = getChar()
+		humanoid.PlatformStand = true
 
-	function Module.GetFatiguePercent(): number?
-		local attrFatigue = localPlayer:GetAttribute("Fatigue") or localPlayer:GetAttribute("fatigue")
-		if attrFatigue and type(attrFatigue) == "number" then return attrFatigue end
-
-		local success, text = pcall(function()
-			return playerGui.HUD.Bars.MainHUD.FatigueStamina.Text
-		end)
-		if success and text then
-			local fatigueVal = string.match(text, "Fatigue:%s*(%d+%.?%d*)")
-			if fatigueVal then return tonumber(fatigueVal) end
-		end
-		return nil
-	end
-
-	local function getItemQuantity(tool: Instance): number
-		local qtyAttr = tool:GetAttribute("Quantity") or tool:GetAttribute("quantity") or tool:GetAttribute("Amount")
-		if qtyAttr and type(qtyAttr) == "number" then return qtyAttr end
-		return 1
-	end
-
-	function Module.CountSteaksInInventory(): number
-		local char = localPlayer.Character
-		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		local count = 0
-
-		if char then
-			for _, tool in ipairs(char:GetChildren()) do
-				if tool:IsA("Tool") and tool.Name == "Steak" then
-					count += getItemQuantity(tool)
-				end
-			end
-		end
-
-		if backpack then
-			for _, tool in ipairs(backpack:GetChildren()) do
-				if tool:IsA("Tool") and tool.Name == "Steak" then
-					count += getItemQuantity(tool)
-				end
-			end
-		end
-
-		return count
-	end
-
-	function Module.IsFoodEquipped(): boolean
-		local char = localPlayer.Character
-		if not char then return false end
-		for _, tool in ipairs(char:GetChildren()) do
-			if tool:IsA("Tool") and table.find(FOOD_ITEMS, tool.Name) then
-				return true
-			end
-		end
-		return false
-	end
-
-	function Module.EquipFood(): boolean
-		if not Module.VerifyMacroDisabled() then
-			warn("[AutoTrain] Could not verify macro disabled before equipping food!")
-			return false
-		end
-
-		if Module.IsFoodEquipped() then return true end
-
-		local char, hum, _ = getChar()
-		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		if not backpack or not hum then return false end
+		State.CurrentPath = PathfindingService:CreatePath(PATH_PARAMS)
+		local waypoints = {}
+		local success, err
 
 		for attempt = 1, 3 do
-			Module.VerifyMacroDisabled()
-			hum:UnequipTools()
-			task.wait(0.2)
-
-			for _, tool in ipairs(backpack:GetChildren()) do
-				if tool:IsA("Tool") and table.find(FOOD_ITEMS, tool.Name) then
-					tool.Parent = char
-					task.wait(0.3)
-					if Module.IsFoodEquipped() then return true end
-				end
-			end
-			task.wait(0.2)
-		end
-
-		return Module.IsFoodEquipped()
-	end
-
-	function Module.EquipSleepingBag(): boolean
-		if not Module.VerifyMacroDisabled() then
-			warn("[AutoTrain] Could not verify macro disabled before equipping Sleeping Bag!")
-			return false
-		end
-
-		local char = localPlayer.Character
-		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		local _, hum, _ = getChar()
-
-		if not char or not hum then return false end
-
-		for _, tool in ipairs(char:GetChildren()) do
-			if tool:IsA("Tool") and tool.Name == "Sleeping Bag" then
-				return true
-			end
-		end
-
-		if backpack then
-			for _, tool in ipairs(backpack:GetChildren()) do
-				if tool:IsA("Tool") and tool.Name == "Sleeping Bag" then
-					tool.Parent = char
-					task.wait(0.3)
-					return true
-				end
-			end
-		end
-
-		return false
-	end
-
-	function Module.UseEquippedTool(): boolean
-		Module.VerifyMacroDisabled()
-		local char = localPlayer.Character
-		if not char then return false end
-		local tool = char:FindFirstChildOfClass("Tool")
-		if tool then
-			tool:Activate()
-			return true
-		end
-		return false
-	end
-
-	function Module.BuySteakInteraction(clicksToBuy: number)
-		Module.VerifyMacroDisabled()
-		local ignoreFolder = Workspace:FindFirstChild("Ignore")
-		local interactables = ignoreFolder and ignoreFolder:FindFirstChild("Interactables")
-		local buyablesFolder = interactables and interactables:FindFirstChild("Buyables")
-		local steakObject = buyablesFolder and buyablesFolder:FindFirstChild("Steak")
-		local steakDetector = steakObject and steakObject:FindFirstChildOfClass("ClickDetector")
-
-		if steakDetector and fireclickdetector then
-			print(string.format("[Store] Firing Steak ClickDetector %d time(s)...", clicksToBuy))
-			for i = 1, clicksToBuy do
-				if not State.AutoTrain and not State.Navigating then break end
-				Module.VerifyMacroDisabled()
-				fireclickdetector(steakDetector)
-				task.wait(0.25)
-			end
-		end
-	end
-
-	function Module.TryRemoteBuy(): boolean
-		Module.VerifyMacroDisabled()
-		local initialSteaks = Module.CountSteaksInInventory()
-		if initialSteaks >= MIN_STEAK_THRESHOLD then
-			print(string.format("[Store] Steak limit reached (%d/%d). Skipping buy.", initialSteaks, MIN_STEAK_THRESHOLD))
-			return true
-		end
-
-		local needed = MAX_STEAK_TARGET - initialSteaks
-		if needed > 0 then
-			print(string.format("[Store] Attempting remote buy for %d steak(s)...", needed))
-			Module.BuySteakInteraction(needed)
-			task.wait(0.5)
-		end
-
-		local updatedSteaks = Module.CountSteaksInInventory()
-		if updatedSteaks > initialSteaks or updatedSteaks >= MIN_STEAK_THRESHOLD then
-			return true
-		end
-
-		return false
-	end
-
-	function Module.HandleRestockFlow()
-		Module.VerifyMacroDisabled()
-		if Module.CountSteaksInInventory() >= MIN_STEAK_THRESHOLD then
-			return
-		end
-
-		if Module.TryRemoteBuy() then
-			return
-		end
-
-		warn("[Restock] Remote buy ineffective. Navigating to vendor...")
-		local reachedVendor = false
-		if PathModule then
-			PathModule.NavigateToCFrame(PathModule.TARGET_CFRAME, function()
-				reachedVendor = true
+			success, err = pcall(function()
+				State.CurrentPath:ComputeAsync(root.Position, targetCFrame.Position)
 			end)
-		end
-
-		local timeout = 0
-		repeat
-			Module.VerifyMacroDisabled()
-			task.wait(0.5)
-			timeout += 0.5
-			if timeout >= 20 then
-				if PathModule then PathModule.StopPathfinding() end
-				break
+			if success and State.CurrentPath.Status == Enum.PathStatus.Success then
+				waypoints = State.CurrentPath:GetWaypoints()
+				if #waypoints > 0 then break end
 			end
-		until reachedVendor or not State.AutoTrain
-	end
-
-	function Module.StopAutoTrain()
-		State.AutoTrain = false
-		Module.VerifyMacroDisabled()
-
-		if State.TrainThread then
-			task.cancel(State.TrainThread)
-			State.TrainThread = nil
+			task.wait(0.2)
 		end
 
-		if State.AntiAfkThread then
-			task.cancel(State.AntiAfkThread)
-			State.AntiAfkThread = nil
-		end
-
-		if PathModule then
-			PathModule.StopPathfinding()
-		end
-
-		if Toggles and Toggles.AutoTrainToggle then
-			Toggles.AutoTrainToggle:SetValue(false)
-		end
-
-		print("[AutoTrain] System Stopped.")
-	end
-
-	function Module.StartAutoTrain()
-		Module.StopAutoTrain()
-
-		-- PRE-CHECK: KICK IMMEDIATELY IF REQUIREMENTS ARE NOT MET
-		if Module.CheckKickConditions() then
+		if not success or #waypoints == 0 then
+			warn("[Pathfinding Engine] Path computation failed. Fallback executed.")
+			Module.StopPathfinding()
+			if onArrivalCallback then onArrivalCallback() end
 			return
 		end
 
-		State.AutoTrain = true
+		local currentWaypointIndex = 2
 
-		if Toggles and Toggles.AutoTrainToggle then
-			Toggles.AutoTrainToggle:SetValue(true)
-		end
-
-		State.AntiAfkThread = task.spawn(function()
-			while State.AutoTrain do
-				task.wait(300)
-				if State.AutoTrain then
-					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-					task.wait(0.5)
-					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-				end
+		State.Connections["Blocked"] = State.CurrentPath.Blocked:Connect(function(blockedIndex)
+			if blockedIndex >= currentWaypointIndex and State.Navigating then
+				Module.NavigateToCFrame(targetCFrame, onArrivalCallback)
 			end
 		end)
 
-		State.TrainThread = task.spawn(function()
-			print("[AutoTrain] Initialized.")
+		State.Connections["Heartbeat"] = RunService.Heartbeat:Connect(function(dt)
+			if not State.Navigating then return end
+			
+			-- OPERATION: MOVEMENT (Strict Macro Lock)
+			TrainModule.EnsureMacroState(false)
 
-			while State.AutoTrain do
-				task.wait(1)
-				if not State.AutoTrain then break end
+			if currentWaypointIndex > #waypoints then
+				releaseAllKeys()
+				root.CFrame = CFrame.new(root.Position) * targetCFrame.Rotation
+				Module.StopPathfinding()
+				task.defer(function()
+					TrainModule.TryRemoteBuy()
+					if onArrivalCallback then onArrivalCallback() end
+				end)
+				return
+			end
 
-				-- CONTINUOUS SAFETY CHECK
-				if Module.CheckKickConditions() then
-					break
-				end
+			local currentPos = root.Position
+			local targetPos = waypoints[currentWaypointIndex].Position
+			local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
+			local flatCurrent = Vector3.new(currentPos.X, 0, currentPos.Z)
 
-				-- OPERATION 1: SLEEPING
-				local currentFatigue = Module.GetFatiguePercent()
-				if currentFatigue and currentFatigue >= MAX_FATIGUE_THRESHOLD then
-					print(string.format("[AutoTrain] Fatigue high (%.1f%%)! Verifying macro disabled...", currentFatigue))
-					Module.VerifyMacroDisabled()
-					Module.UnequipAllTools()
-					task.wait(0.5)
+			if (flatTarget - flatCurrent).Magnitude <= 1.5 then
+				currentWaypointIndex += 1
+				return
+			end
 
-					while State.AutoTrain do
-						if Module.CheckKickConditions() then break end
+			local moveDirection = (flatTarget - flatCurrent).Unit
+			local camCFrame = camera.CFrame
+			local camLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+			local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
-						if not Module.IsMacroDisabled() then
-							Module.VerifyMacroDisabled()
-						end
+			local forwardDot = moveDirection:Dot(camLook)
+			local rightDot = moveDirection:Dot(camRight)
 
-						local fatigueNow = Module.GetFatiguePercent() or 0
-						if fatigueNow <= MIN_FATIGUE_TARGET then
-							print("[AutoTrain] Rest complete!")
-							break
-						end
+			setKeyState(Enum.KeyCode.W, forwardDot > 0.3)
+			setKeyState(Enum.KeyCode.S, forwardDot < -0.3)
+			setKeyState(Enum.KeyCode.D, rightDot > 0.3)
+			setKeyState(Enum.KeyCode.A, rightDot < -0.3)
 
-						Module.UnequipAllTools()
-						task.wait(0.5)
-
-						if Module.EquipSleepingBag() then
-							task.wait(0.3)
-							Module.UseEquippedTool()
-
-							local lastFatigue = fatigueNow
-							local stuckCounter = 0
-
-							while State.AutoTrain do
-								task.wait(3)
-
-								if not Module.IsMacroDisabled() then
-									Module.VerifyMacroDisabled()
-								end
-
-								local liveFatigue = Module.GetFatiguePercent() or lastFatigue
-								if liveFatigue <= MIN_FATIGUE_TARGET then
-									fatigueNow = liveFatigue
-									break
-								end
-
-								if liveFatigue < lastFatigue then
-									stuckCounter = 0
-									lastFatigue = liveFatigue
-								else
-									stuckCounter += 1
-								end
-
-								if stuckCounter >= 3 then
-									warn("[AutoTrain] Fatigue stuck! Resetting state...")
-									break
-								end
-							end
-						else
-							task.wait(3)
-						end
-					end
-
-					if State.AutoTrain then
-						Module.UnequipAllTools()
-						task.wait(0.5)
-					end
-				end
-
-				if not State.AutoTrain then break end
-
-				-- OPERATION 2: EATING & RESTOCKING
-				local currentHunger = Module.GetHungerPercent()
-				if currentHunger and currentHunger <= MIN_HUNGER_THRESHOLD then
-					print("[AutoTrain] Hunger low! Verifying macro disabled...")
-
-					Module.VerifyMacroDisabled()
-					Module.UnequipAllTools()
-					task.wait(0.5)
-
-					Module.TryRemoteBuy()
-
-					if not Module.EquipFood() then
-						Module.HandleRestockFlow()
-						if not State.AutoTrain then break end
-						task.wait(1)
-					end
-
-					local failedEquipAttempts = 0
-					while State.AutoTrain do
-						if Module.CheckKickConditions() then break end
-
-						if not Module.IsMacroDisabled() then
-							warn("[AutoTrain] Macro re-enabled unexpectedly! Force disabling...")
-							Module.VerifyMacroDisabled()
-						end
-
-						local hungerNow = Module.GetHungerPercent() or 0
-						if hungerNow >= MIN_EAT_TARGET then
-							print(string.format("[AutoTrain] Restored Hunger to %d%%.", hungerNow))
-							break
-						end
-
-						if not Module.EquipFood() then
-							failedEquipAttempts += 1
-							warn(string.format("[AutoTrain] Equip food failed (%d/3)...", failedEquipAttempts))
-							if failedEquipAttempts >= 3 then
-								warn("[AutoTrain] Restocking food...")
-								Module.UnequipAllTools()
-								Module.HandleRestockFlow()
-								if not State.AutoTrain then break end
-								task.wait(1)
-								failedEquipAttempts = 0
-							end
-							task.wait(0.5)
-						else
-							failedEquipAttempts = 0
-							Module.UseEquippedTool()
-							task.wait(0.8)
-						end
-					end
-
-					if State.AutoTrain then
-						Module.UnequipAllTools()
-						task.wait(0.5)
-					end
-				end
-
-				-- OPERATION 3: ACTIVE MACRO TRAINING
-				if State.AutoTrain and not State.Navigating then
-					Module.SetMacroActive(true)
+			if waypoints[currentWaypointIndex].Action == Enum.PathWaypointAction.Jump or (targetPos.Y - currentPos.Y) > 2 then
+				if humanoid.FloorMaterial ~= Enum.Material.Air then
+					setKeyState(Enum.KeyCode.Space, true)
+					task.delay(0.1, function()
+						setKeyState(Enum.KeyCode.Space, false)
+					end)
 				end
 			end
+
+			if moveDirection.Magnitude > 0 then
+				root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, root.Position + moveDirection), dt * 10)
+			end
+
+			applyFriction(dt)
+			accel(moveDirection, PHYSICS_CFG.targetSpeed, dt)
+			State.Velocity = Vector3.new(State.Velocity.X, root.AssemblyLinearVelocity.Y, State.Velocity.Z)
+			root.AssemblyLinearVelocity = State.Velocity
 		end)
 	end
 
-	-- Initialize default state strictly disabled
-	Module.VerifyMacroDisabled()
-
+	Module.TARGET_CFRAME = TARGET_CFRAME
 	return Module
 end
 
-return TrainModule
+return PathfindingModule
