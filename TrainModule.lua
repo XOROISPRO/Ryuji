@@ -6,7 +6,6 @@ local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
 local playerGui = localPlayer:WaitForChild("PlayerGui")
-
 local macroScript = ReplicatedStorage:WaitForChild("Modules")
 	:WaitForChild("Client")
 	:WaitForChild("Main")
@@ -23,7 +22,6 @@ local MIN_HUNGER_THRESHOLD = 25
 local MIN_EAT_TARGET = 70
 local MAX_FATIGUE_THRESHOLD = 80
 local MIN_FATIGUE_TARGET = 0
-local MIN_CASH_THRESHOLD = 1000
 
 function TrainModule.Init(State: any, Toggles: any)
 	local Module = {}
@@ -49,18 +47,24 @@ function TrainModule.Init(State: any, Toggles: any)
 	-- Forcefully disables macro and waits until the state is verified false/nil
 	function Module.VerifyMacroDisabled(): boolean
 		State.MacroActive = false
+
 		for attempt = 1, 5 do
 			localPlayer:SetAttribute("autoMacro", false)
+
 			pcall(function()
 				macroScript:SetAttribute("AutoUseVests", false)
 				macroScript:SetAttribute("AutoUseMask", false)
 			end)
+
 			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+
 			task.wait(0.1)
+
 			if Module.IsMacroDisabled() then
 				return true
 			end
 		end
+
 		return Module.IsMacroDisabled()
 	end
 
@@ -82,71 +86,42 @@ function TrainModule.Init(State: any, Toggles: any)
 		Module.VerifyMacroDisabled()
 		local _, hum, _ = getChar()
 		if hum then
-			pcall(function()
-				hum:UnequipTools()
-			end)
+			pcall(function() hum:UnequipTools() end)
 			task.wait(0.3)
 		end
 	end
 
 	function Module.GetHungerPercent(): number?
 		local attrHunger = localPlayer:GetAttribute("Hunger") or localPlayer:GetAttribute("hunger")
-		if attrHunger and type(attrHunger) == "number" then
-			return attrHunger
-		end
+		if attrHunger and type(attrHunger) == "number" then return attrHunger end
 
 		local success, text = pcall(function()
 			return playerGui.HUD.Bars.MainHUD.HungerDisplay.Text
 		end)
-
 		if success and text then
 			local rawNum = string.match(text, "%d+")
-			if rawNum then
-				return tonumber(rawNum)
-			end
+			if rawNum then return tonumber(rawNum) end
 		end
 		return nil
 	end
 
 	function Module.GetFatiguePercent(): number?
 		local attrFatigue = localPlayer:GetAttribute("Fatigue") or localPlayer:GetAttribute("fatigue")
-		if attrFatigue and type(attrFatigue) == "number" then
-			return attrFatigue
-		end
+		if attrFatigue and type(attrFatigue) == "number" then return attrFatigue end
 
 		local success, text = pcall(function()
 			return playerGui.HUD.Bars.MainHUD.FatigueStamina.Text
 		end)
-
 		if success and text then
 			local fatigueVal = string.match(text, "Fatigue:%s*(%d+%.?%d*)")
-			if fatigueVal then
-				return tonumber(fatigueVal)
-			end
-		end
-		return nil
-	end
-
-	function Module.GetCashAmount(): number?
-		local success, text = pcall(function()
-			return playerGui.HUD.Bars.MainHUD.Cash.Text
-		end)
-
-		if success and text then
-			-- Filters non-digits out (e.g. "¥ 1,500" or "1000 Yen" -> "1500" / "1000")
-			local rawNum = string.gsub(text, "%D", "")
-			if rawNum and rawNum ~= "" then
-				return tonumber(rawNum)
-			end
+			if fatigueVal then return tonumber(fatigueVal) end
 		end
 		return nil
 	end
 
 	local function getItemQuantity(tool: Instance): number
 		local qtyAttr = tool:GetAttribute("Quantity") or tool:GetAttribute("quantity") or tool:GetAttribute("Amount")
-		if qtyAttr and type(qtyAttr) == "number" then
-			return qtyAttr
-		end
+		if qtyAttr and type(qtyAttr) == "number" then return qtyAttr end
 		return 1
 	end
 
@@ -176,10 +151,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 	function Module.IsFoodEquipped(): boolean
 		local char = localPlayer.Character
-		if not char then
-			return false
-		end
-
+		if not char then return false end
 		for _, tool in ipairs(char:GetChildren()) do
 			if tool:IsA("Tool") and table.find(FOOD_ITEMS, tool.Name) then
 				return true
@@ -189,21 +161,17 @@ function TrainModule.Init(State: any, Toggles: any)
 	end
 
 	function Module.EquipFood(): boolean
+		-- Ensure macro is completely dead before tool swap
 		if not Module.VerifyMacroDisabled() then
 			warn("[AutoTrain] Could not verify macro disabled before equipping food!")
 			return false
 		end
 
-		if Module.IsFoodEquipped() then
-			return true
-		end
+		if Module.IsFoodEquipped() then return true end
 
 		local char, hum, _ = getChar()
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-
-		if not backpack or not hum then
-			return false
-		end
+		if not backpack or not hum then return false end
 
 		for attempt = 1, 3 do
 			Module.VerifyMacroDisabled()
@@ -214,9 +182,7 @@ function TrainModule.Init(State: any, Toggles: any)
 				if tool:IsA("Tool") and table.find(FOOD_ITEMS, tool.Name) then
 					tool.Parent = char
 					task.wait(0.3)
-					if Module.IsFoodEquipped() then
-						return true
-					end
+					if Module.IsFoodEquipped() then return true end
 				end
 			end
 			task.wait(0.2)
@@ -235,9 +201,7 @@ function TrainModule.Init(State: any, Toggles: any)
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
 		local _, hum, _ = getChar()
 
-		if not char or not hum then
-			return false
-		end
+		if not char or not hum then return false end
 
 		for _, tool in ipairs(char:GetChildren()) do
 			if tool:IsA("Tool") and tool.Name == "Sleeping Bag" then
@@ -261,10 +225,7 @@ function TrainModule.Init(State: any, Toggles: any)
 	function Module.UseEquippedTool(): boolean
 		Module.VerifyMacroDisabled()
 		local char = localPlayer.Character
-		if not char then
-			return false
-		end
-
+		if not char then return false end
 		local tool = char:FindFirstChildOfClass("Tool")
 		if tool then
 			tool:Activate()
@@ -284,9 +245,7 @@ function TrainModule.Init(State: any, Toggles: any)
 		if steakDetector and fireclickdetector then
 			print(string.format("[Store] Firing Steak ClickDetector %d time(s)...", clicksToBuy))
 			for i = 1, clicksToBuy do
-				if not State.AutoTrain or not State.Navigating then
-					break
-				end
+				if not State.AutoTrain and not State.Navigating then break end
 				Module.VerifyMacroDisabled()
 				fireclickdetector(steakDetector)
 				task.wait(0.25)
@@ -297,7 +256,6 @@ function TrainModule.Init(State: any, Toggles: any)
 	function Module.TryRemoteBuy(): boolean
 		Module.VerifyMacroDisabled()
 		local initialSteaks = Module.CountSteaksInInventory()
-
 		if initialSteaks >= MIN_STEAK_THRESHOLD then
 			print(string.format("[Store] Steak limit reached (%d/%d). Skipping buy.", initialSteaks, MIN_STEAK_THRESHOLD))
 			return true
@@ -330,7 +288,6 @@ function TrainModule.Init(State: any, Toggles: any)
 
 		warn("[Restock] Remote buy ineffective. Navigating to vendor...")
 		local reachedVendor = false
-
 		if PathModule then
 			PathModule.NavigateToCFrame(PathModule.TARGET_CFRAME, function()
 				reachedVendor = true
@@ -343,9 +300,7 @@ function TrainModule.Init(State: any, Toggles: any)
 			task.wait(0.5)
 			timeout += 0.5
 			if timeout >= 20 then
-				if PathModule then
-					PathModule.StopPathfinding()
-				end
+				if PathModule then PathModule.StopPathfinding() end
 				break
 			end
 		until reachedVendor or not State.AutoTrain
@@ -363,11 +318,6 @@ function TrainModule.Init(State: any, Toggles: any)
 		if State.AntiAfkThread then
 			task.cancel(State.AntiAfkThread)
 			State.AntiAfkThread = nil
-		end
-
-		if State.DeathConnection then
-			State.DeathConnection:Disconnect()
-			State.DeathConnection = nil
 		end
 
 		if PathModule then
@@ -389,33 +339,6 @@ function TrainModule.Init(State: any, Toggles: any)
 			Toggles.AutoTrainToggle:SetValue(true)
 		end
 
-		-- Setup Death Listener
-		local function setupDeathListener(char: Model)
-			if State.DeathConnection then
-				State.DeathConnection:Disconnect()
-				State.DeathConnection = nil
-			end
-			local hum = char:WaitForChild("Humanoid", 5) :: Humanoid?
-			if hum then
-				State.DeathConnection = hum.Died:Connect(function()
-					if State.AutoTrain then
-						localPlayer:Kick("[AutoTrain] Safety Kick: Player died.")
-					end
-				end)
-			end
-		end
-
-		if localPlayer.Character then
-			setupDeathListener(localPlayer.Character)
-		end
-
-		State.CharacterAddedConnection = localPlayer.CharacterAdded:Connect(function(newChar)
-			if State.AutoTrain then
-				setupDeathListener(newChar)
-			end
-		end)
-
-		-- Anti-AFK Thread
 		State.AntiAfkThread = task.spawn(function()
 			while State.AutoTrain do
 				task.wait(300)
@@ -427,22 +350,12 @@ function TrainModule.Init(State: any, Toggles: any)
 			end
 		end)
 
-		-- Main Training Thread
 		State.TrainThread = task.spawn(function()
 			print("[AutoTrain] Initialized.")
 
 			while State.AutoTrain do
 				task.wait(1)
-				if not State.AutoTrain then
-					break
-				end
-
-				-- OPERATION 0: CASH SAFETY CHECK
-				local currentCash = Module.GetCashAmount()
-				if currentCash and currentCash <= MIN_CASH_THRESHOLD then
-					localPlayer:Kick(string.format("[AutoTrain] Cash too low! Current: %d Yen (Limit: %d Yen)", currentCash, MIN_CASH_THRESHOLD))
-					break
-				end
+				if not State.AutoTrain then break end
 
 				-- OPERATION 1: SLEEPING
 				local currentFatigue = Module.GetFatiguePercent()
@@ -453,6 +366,7 @@ function TrainModule.Init(State: any, Toggles: any)
 					task.wait(0.5)
 
 					while State.AutoTrain do
+						-- Continuous verification during sleep routine
 						if not Module.IsMacroDisabled() then
 							Module.VerifyMacroDisabled()
 						end
@@ -475,6 +389,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 							while State.AutoTrain do
 								task.wait(3)
+
 								if not Module.IsMacroDisabled() then
 									Module.VerifyMacroDisabled()
 								end
@@ -508,14 +423,14 @@ function TrainModule.Init(State: any, Toggles: any)
 					end
 				end
 
-				if not State.AutoTrain then
-					break
-				end
+				if not State.AutoTrain then break end
 
 				-- OPERATION 2: EATING & RESTOCKING
 				local currentHunger = Module.GetHungerPercent()
 				if currentHunger and currentHunger <= MIN_HUNGER_THRESHOLD then
 					print("[AutoTrain] Hunger low! Verifying macro disabled...")
+
+					-- VERIFY MACRO IS DEAD BEFORE EATING PROCEDURE
 					Module.VerifyMacroDisabled()
 					Module.UnequipAllTools()
 					task.wait(0.5)
@@ -524,14 +439,13 @@ function TrainModule.Init(State: any, Toggles: any)
 
 					if not Module.EquipFood() then
 						Module.HandleRestockFlow()
-						if not State.AutoTrain then
-							break
-						end
+						if not State.AutoTrain then break end
 						task.wait(1)
 					end
 
 					local failedEquipAttempts = 0
 					while State.AutoTrain do
+						-- Check macro state continuously while eating
 						if not Module.IsMacroDisabled() then
 							warn("[AutoTrain] Macro re-enabled unexpectedly! Force disabling...")
 							Module.VerifyMacroDisabled()
@@ -550,9 +464,7 @@ function TrainModule.Init(State: any, Toggles: any)
 								warn("[AutoTrain] Restocking food...")
 								Module.UnequipAllTools()
 								Module.HandleRestockFlow()
-								if not State.AutoTrain then
-									break
-								end
+								if not State.AutoTrain then break end
 								task.wait(1)
 								failedEquipAttempts = 0
 							end
@@ -571,6 +483,7 @@ function TrainModule.Init(State: any, Toggles: any)
 				end
 
 				-- OPERATION 3: ACTIVE MACRO TRAINING
+				-- Only enable macro when we are done eating, sleeping, and navigating
 				if State.AutoTrain and not State.Navigating then
 					Module.SetMacroActive(true)
 				end
@@ -580,6 +493,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 	-- Initialize default state strictly disabled
 	Module.VerifyMacroDisabled()
+
 	return Module
 end
 
