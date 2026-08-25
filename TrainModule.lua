@@ -16,9 +16,6 @@ local TrainModule = {}
 
 -- Constants
 local FOOD_ITEMS = { "Boba Tea", "Coffee", "Steak", "Dango" }
-local REQUIRED_TRAINING_TOOLS = { "Jumping Rope", "One Hand Pushups" }
-local MIN_MONEY_LIMIT = 1000
-
 local MAX_STEAK_TARGET = 11
 local MIN_STEAK_THRESHOLD = 10
 local MIN_HUNGER_THRESHOLD = 25
@@ -29,6 +26,17 @@ local MIN_FATIGUE_TARGET = 0
 function TrainModule.Init(State: any, Toggles: any)
 	local Module = {}
 	local PathModule: any = nil
+
+	function Module.SetPathModule(pm: any)
+		PathModule = pm
+	end
+
+	local function getChar(): (Model, Humanoid, BasePart)
+		local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+		local hum = char:WaitForChild("Humanoid") :: Humanoid
+		local root = char:WaitForChild("HumanoidRootPart") :: BasePart
+		return char, hum, root
+	end
 
 	-- Checks if macro attribute is explicitly false or nil
 	function Module.IsMacroDisabled(): boolean
@@ -74,131 +82,10 @@ function TrainModule.Init(State: any, Toggles: any)
 		end
 	end
 
-	function Module.SetPathModule(pm: any)
-		PathModule = pm
-	end
-
-	local function getChar(): (Model?, Humanoid?, BasePart?)
-		local char = localPlayer.Character
-		if not char then return nil, nil, nil end
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
-		if hum and root then
-			return char, hum, root
-		end
-		return nil, nil, nil
-	end
-
-	-- Checks player's Yen / Money value
-	function Module.GetPlayerMoney(): number
-		local moneyAttr = localPlayer:GetAttribute("Yen") 
-			or localPlayer:GetAttribute("Money") 
-			or localPlayer:GetAttribute("yen") 
-			or localPlayer:GetAttribute("money")
-
-		if moneyAttr and type(moneyAttr) == "number" then
-			return moneyAttr
-		end
-
-		local leaderstats = localPlayer:FindFirstChild("leaderstats")
-		if leaderstats then
-			local yenVal = leaderstats:FindFirstChild("Yen") or leaderstats:FindFirstChild("Money")
-			if yenVal and yenVal:IsA("ValueBase") then
-				return tonumber(yenVal.Value) or 0
-			end
-		end
-
-		return 0
-	end
-
-	-- Checks if player has both Jumping Rope and One Hand Pushups
-	function Module.HasRequiredTrainingTools(): (boolean, string?)
-		local char = localPlayer.Character
-		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		
-		for _, requiredTool in ipairs(REQUIRED_TRAINING_TOOLS) do
-			local found = false
-
-			if char and char:FindFirstChild(requiredTool) then
-				found = true
-			elseif backpack and backpack:FindFirstChild(requiredTool) then
-				found = true
-			end
-
-			if not found then
-				return false, requiredTool
-			end
-		end
-
-		return true, nil
-	end
-
-	-- Check if player is dead or missing humanoid
-	function Module.IsDead(): boolean
-		local char = localPlayer.Character
-		if not char then return true end
-		
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if not hum or hum.Health <= 0 or hum:GetState() == Enum.HumanoidStateType.Dead then
-			return true
-		end
-
-		return false
-	end
-
-	-- Kick Safety Checks Handler
-	function Module.CheckKickConditions(): boolean
-		if Module.IsDead() then
-			local msg = "[AutoTrain Kick] Character died."
-			warn(msg)
-			localPlayer:Kick(msg)
-			return true
-		end
-
-		local hasTools, missingTool = Module.HasRequiredTrainingTools()
-		if not hasTools then
-			local msg = string.format("[AutoTrain Kick] Missing required training tool: '%s'", tostring(missingTool))
-			warn(msg)
-			localPlayer:Kick(msg)
-			return true
-		end
-
-		local currentMoney = Module.GetPlayerMoney()
-		if currentMoney <= MIN_MONEY_LIMIT then
-			local msg = string.format("[AutoTrain Kick] Money is too low ($%d <= $%d)", currentMoney, MIN_MONEY_LIMIT)
-			warn(msg)
-			localPlayer:Kick(msg)
-			return true
-		end
-
-		return false
-	end
-
-	-- Setup active Death Listener on Humanoid directly
-	function Module.SetupDeathConnection()
-		if State.DeathConnection then
-			State.DeathConnection:Disconnect()
-			State.DeathConnection = nil
-		end
-
-		local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-		local hum = char:WaitForChild("Humanoid", 5) :: Humanoid?
-
-		if hum then
-			State.DeathConnection = hum.Died:Connect(function()
-				if State.AutoTrain then
-					local msg = "[AutoTrain Kick] Character died."
-					warn(msg)
-					localPlayer:Kick(msg)
-				end
-			end)
-		end
-	end
-
 	function Module.UnequipAllTools()
 		Module.VerifyMacroDisabled()
-		local char, hum, root = getChar()
-		if char and hum then
+		local _, hum, _ = getChar()
+		if hum then
 			pcall(function() hum:UnequipTools() end)
 			task.wait(0.3)
 		end
@@ -274,6 +161,7 @@ function TrainModule.Init(State: any, Toggles: any)
 	end
 
 	function Module.EquipFood(): boolean
+		-- Ensure macro is completely dead before tool swap
 		if not Module.VerifyMacroDisabled() then
 			warn("[AutoTrain] Could not verify macro disabled before equipping food!")
 			return false
@@ -283,7 +171,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 		local char, hum, _ = getChar()
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-		if not backpack or not char or not hum then return false end
+		if not backpack or not hum then return false end
 
 		for attempt = 1, 3 do
 			Module.VerifyMacroDisabled()
@@ -309,10 +197,11 @@ function TrainModule.Init(State: any, Toggles: any)
 			return false
 		end
 
-		local char, hum, _ = getChar()
+		local char = localPlayer.Character
 		local backpack = localPlayer:FindFirstChildOfClass("Backpack")
+		local _, hum, _ = getChar()
 
-		if not char then return false end
+		if not char or not hum then return false end
 
 		for _, tool in ipairs(char:GetChildren()) do
 			if tool:IsA("Tool") and tool.Name == "Sleeping Bag" then
@@ -399,7 +288,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 		warn("[Restock] Remote buy ineffective. Navigating to vendor...")
 		local reachedVendor = false
-		if PathModule and typeof(PathModule) == "table" and typeof(PathModule.NavigateToCFrame) == "function" then
+		if PathModule then
 			PathModule.NavigateToCFrame(PathModule.TARGET_CFRAME, function()
 				reachedVendor = true
 			end)
@@ -411,44 +300,32 @@ function TrainModule.Init(State: any, Toggles: any)
 			task.wait(0.5)
 			timeout += 0.5
 			if timeout >= 20 then
-				if PathModule and typeof(PathModule) == "table" and typeof(PathModule.StopPathfinding) == "function" then
-					PathModule.StopPathfinding() 
-				end
+				if PathModule then PathModule.StopPathfinding() end
 				break
 			end
 		until reachedVendor or not State.AutoTrain
 	end
 
 	function Module.StopAutoTrain()
-		if State then
-			State.AutoTrain = false
-		end
-		
+		State.AutoTrain = false
 		Module.VerifyMacroDisabled()
 
-		if State then
-			if State.DeathConnection then
-				State.DeathConnection:Disconnect()
-				State.DeathConnection = nil
-			end
-
-			if State.TrainThread then
-				task.cancel(State.TrainThread)
-				State.TrainThread = nil
-			end
-
-			if State.AntiAfkThread then
-				task.cancel(State.AntiAfkThread)
-				State.AntiAfkThread = nil
-			end
+		if State.TrainThread then
+			task.cancel(State.TrainThread)
+			State.TrainThread = nil
 		end
 
-		if PathModule and typeof(PathModule) == "table" and typeof(PathModule.StopPathfinding) == "function" then
-			pcall(function() PathModule.StopPathfinding() end)
+		if State.AntiAfkThread then
+			task.cancel(State.AntiAfkThread)
+			State.AntiAfkThread = nil
 		end
 
-		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
-			pcall(function() Toggles.AutoTrainToggle:SetValue(false) end)
+		if PathModule then
+			PathModule.StopPathfinding()
+		end
+
+		if Toggles and Toggles.AutoTrainToggle then
+			Toggles.AutoTrainToggle:SetValue(false)
 		end
 
 		print("[AutoTrain] System Stopped.")
@@ -456,20 +333,14 @@ function TrainModule.Init(State: any, Toggles: any)
 
 	function Module.StartAutoTrain()
 		Module.StopAutoTrain()
-
-		if Module.CheckKickConditions() then
-			return
-		end
-
 		State.AutoTrain = true
-		Module.SetupDeathConnection()
 
-		if Toggles and typeof(Toggles) == "table" and Toggles.AutoTrainToggle and typeof(Toggles.AutoTrainToggle.SetValue) == "function" then
-			pcall(function() Toggles.AutoTrainToggle:SetValue(true) end)
+		if Toggles and Toggles.AutoTrainToggle then
+			Toggles.AutoTrainToggle:SetValue(true)
 		end
 
 		State.AntiAfkThread = task.spawn(function()
-			while State and State.AutoTrain do
+			while State.AutoTrain do
 				task.wait(300)
 				if State.AutoTrain then
 					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
@@ -482,13 +353,9 @@ function TrainModule.Init(State: any, Toggles: any)
 		State.TrainThread = task.spawn(function()
 			print("[AutoTrain] Initialized.")
 
-			while State and State.AutoTrain do
+			while State.AutoTrain do
 				task.wait(1)
 				if not State.AutoTrain then break end
-
-				if Module.CheckKickConditions() then
-					break
-				end
 
 				-- OPERATION 1: SLEEPING
 				local currentFatigue = Module.GetFatiguePercent()
@@ -499,8 +366,7 @@ function TrainModule.Init(State: any, Toggles: any)
 					task.wait(0.5)
 
 					while State.AutoTrain do
-						if Module.CheckKickConditions() then break end
-
+						-- Continuous verification during sleep routine
 						if not Module.IsMacroDisabled() then
 							Module.VerifyMacroDisabled()
 						end
@@ -523,8 +389,6 @@ function TrainModule.Init(State: any, Toggles: any)
 
 							while State.AutoTrain do
 								task.wait(3)
-
-								if Module.CheckKickConditions() then break end
 
 								if not Module.IsMacroDisabled() then
 									Module.VerifyMacroDisabled()
@@ -566,6 +430,7 @@ function TrainModule.Init(State: any, Toggles: any)
 				if currentHunger and currentHunger <= MIN_HUNGER_THRESHOLD then
 					print("[AutoTrain] Hunger low! Verifying macro disabled...")
 
+					-- VERIFY MACRO IS DEAD BEFORE EATING PROCEDURE
 					Module.VerifyMacroDisabled()
 					Module.UnequipAllTools()
 					task.wait(0.5)
@@ -580,8 +445,7 @@ function TrainModule.Init(State: any, Toggles: any)
 
 					local failedEquipAttempts = 0
 					while State.AutoTrain do
-						if Module.CheckKickConditions() then break end
-
+						-- Check macro state continuously while eating
 						if not Module.IsMacroDisabled() then
 							warn("[AutoTrain] Macro re-enabled unexpectedly! Force disabling...")
 							Module.VerifyMacroDisabled()
@@ -619,6 +483,7 @@ function TrainModule.Init(State: any, Toggles: any)
 				end
 
 				-- OPERATION 3: ACTIVE MACRO TRAINING
+				-- Only enable macro when we are done eating, sleeping, and navigating
 				if State.AutoTrain and not State.Navigating then
 					Module.SetMacroActive(true)
 				end
