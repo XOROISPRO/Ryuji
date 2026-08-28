@@ -19,7 +19,7 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.DirtsFolder = self.JobsRelated:WaitForChild("Dirts")
     self.JobBorders = self.JobsRelated:WaitForChild("Job Borders")
     
-    -- Job Board Position
+    -- Target Job Board CFrame
     self.ReturnCFrame = CFrame.new(
         332.598724, 101.868713, 308.419708, 
         0.993266642, -2.84389445e-09, 0.11585056, 
@@ -31,16 +31,14 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.ZoneCFrame = CFrame.new(169.400146, 115.595703, 642.775269, 1, -0, 0, 0, 1, -0, 0, 0, 1)
     self.ZoneSize = Vector3.new(325, 50, 400)
     
-    -- Physics Parameters
+    -- Custom Physics Parameters
     self.CONFIRM_TIME = 0.5
     self.POLL_TIME = 0.2
-    self.MAX_SPEED = 35
-    self.ACCEL = 25
+    self.MAX_SPEED = 24
+    self.ACCEL = 10
     self.AIR_ACCEL = 2
     self.FRICTION = 6
     self.STOP_SPEED = 1.5
-    self.WAYPOINT_REACH_DIST = 1
-    self.FINAL_REACH_DIST = 1
     
     -- Execution States
     self.Running = false
@@ -51,6 +49,8 @@ function JobBoardDirtModule.Init(State, Toggles)
         velocity = Vector3.new(),
         waypoints = nil,
         waypointIndex = 1,
+        wpStartTime = 0,
+        lastWpPos = nil :: Vector3?,
         done = true,
     }
 
@@ -63,7 +63,7 @@ end
 
 -- Helper Utilities
 local function triggerPrompt(prompt: ProximityPrompt, player: Player)
-    if not prompt or not prompt.Enabled then return end
+    if not prompt or not prompt.Enabled or not prompt.Parent then return end
     if typeof(fireproximityprompt) == "function" then
         fireproximityprompt(prompt)
     elseif typeof(firesignal) == "function" and prompt.Triggered then
@@ -116,7 +116,7 @@ function JobBoardDirtModule:IsInsideZone(position: Vector3): boolean
            math.abs(localPos.Z) <= halfSize.Z
 end
 
--- Movement Engine
+-- Custom Movement Engine (NO MoveTo)
 function JobBoardDirtModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (Vector3, number)
     local state = self.MoveState
     if not state.waypoints or state.waypointIndex > #state.waypoints then
@@ -125,24 +125,51 @@ function JobBoardDirtModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoi
     
     local wp = state.waypoints[state.waypointIndex]
     local wpPos = typeof(wp) == "Vector3" and wp or (wp :: PathWaypoint).Position
-    local reachDist = (state.waypointIndex == #state.waypoints) and self.FINAL_REACH_DIST or self.WAYPOINT_REACH_DIST
-    local flatDelta = Vector3.new(wpPos.X - root.Position.X, 0, wpPos.Z - root.Position.Z)
     
-    if flatDelta.Magnitude < reachDist then
+    -- Flat 2D calculations (Ignores Y level to prevent infinite aerial loops)
+    local currentPos = Vector3.new(root.Position.X, 0, root.Position.Z)
+    local targetPos = Vector3.new(wpPos.X, 0, wpPos.Z)
+    local flatDelta = targetPos - currentPos
+    local distance = flatDelta.Magnitude
+    
+    -- Reach distance threshold
+    local reachDist = (state.waypointIndex == #state.waypoints) and 2 or 3
+    
+    -- Dot product check: detects if we moved past the waypoint
+    local passedWaypoint = false
+    if state.velocity.Magnitude > 1 and state.lastWpPos then
+        local moveDir = state.velocity.Unit
+        local toWp = (targetPos - currentPos).Unit
+        if moveDir:Dot(toWp) < -0.2 then
+            passedWaypoint = true
+        end
+    end
+    
+    -- 1.5s timeout cap per waypoint to break geometry collision loops
+    if state.wpStartTime == 0 then state.wpStartTime = tick() end
+    local timedOut = (tick() - state.wpStartTime) > 1.5
+
+    -- Advance waypoint index if reached, passed, or timed out
+    if distance < reachDist or passedWaypoint or timedOut then
         if typeof(wp) ~= "Vector3" and (wp :: PathWaypoint).Action == Enum.PathWaypointAction.Jump then
             humanoid.Jump = true
         end
+        
         state.waypointIndex += 1
+        state.wpStartTime = tick()
+        
         if state.waypointIndex > #state.waypoints then
             state.velocity = Vector3.new()
             state.done = true
             return Vector3.new(), 0
         end
+        
         local nextWp = state.waypoints[state.waypointIndex]
         local nextPos = typeof(nextWp) == "Vector3" and nextWp or (nextWp :: PathWaypoint).Position
         flatDelta = Vector3.new(nextPos.X - root.Position.X, 0, nextPos.Z - root.Position.Z)
     end
     
+    state.lastWpPos = targetPos
     return (flatDelta.Magnitude < 0.01) and Vector3.new() or flatDelta.Unit, self.MAX_SPEED
 end
 
@@ -156,23 +183,36 @@ end
 
 function JobBoardDirtModule:WalkTo(targetPos: Vector3, hrp: BasePart, hum: Humanoid)
     self:DPrint("Walking to target:", targetPos)
-    local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true })
-    local ok, err = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
+    
+    local path = PathfindingService:CreatePath({ 
+        AgentRadius = 1, 
+        AgentHeight = 5, 
+        AgentCanJump = true 
+    })
+    
+    local ok, err = pcall(function() 
+        path:ComputeAsync(hrp.Position, targetPos) 
+    end)
     
     if ok and path.Status == Enum.PathStatus.Success then
         self.MoveState.waypoints = path:GetWaypoints()
-        self:DPrint("Path computed successfully with", #self.MoveState.waypoints, "waypoints.")
+        self:DPrint("Path computed with", #self.MoveState.waypoints, "waypoints.")
     else
-        self:DPrint("Path computing failed. Using direct fallback vector.", tostring(err))
+        self:DPrint("Path computing failed. Direct vector fallback applied.")
         self.MoveState.waypoints = {targetPos}
     end
     
     self.MoveState.waypointIndex = 1
+    self.MoveState.wpStartTime = tick()
+    self.MoveState.lastWpPos = nil
     self.MoveState.done = false
     
     while not self.MoveState.done and self.Running do
         task.wait()
     end
+    
+    self.MoveState.velocity = Vector3.new()
+    hrp.AssemblyLinearVelocity = Vector3.new(0, hrp.AssemblyLinearVelocity.Y, 0)
     self:DPrint("Reached target position.")
 end
 
@@ -206,6 +246,7 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
         return 0, nil, nil
     end
 
+    -- Dynamically fetch posters every query
     for _, poster in ipairs(postersFolder:GetChildren()) do
         local surfaceGui = poster:FindFirstChildWhichIsA("SurfaceGui", true)
         local infoLabel = surfaceGui and surfaceGui:FindFirstChild("Info")
@@ -231,7 +272,7 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
     return 0, nil, nil
 end
 
--- Active Dirt Target Selection
+-- Active Dirt Selection
 function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     local best: Instance?, bestDist = nil, math.huge
     local totalDirts = self.DirtsFolder:GetChildren()
@@ -240,7 +281,7 @@ function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     for _, d in ipairs(totalDirts) do
         local pos = d:GetPivot().Position
         if self:IsInsideZone(pos) then
-            -- Verify ProximityPrompt exists, is enabled, and is active
+            -- Verify active ProximityPrompt (ignores dirts on cooldown)
             local prompt = d:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt and prompt.Enabled and prompt.Parent then
                 dirtsInZone += 1
@@ -262,14 +303,14 @@ function JobBoardDirtModule:CollectDirt(dirt: Instance)
     self:DPrint("Collecting dirt item:", dirt:GetFullName())
     
     local prompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if not prompt or not prompt.Enabled then return end
+    if not prompt or not prompt.Enabled or not prompt.Parent then return end
     
     triggerPrompt(prompt, self.Player)
     
     local timeout = 5
     local elapsed = 0
     
-    -- Keep triggering until prompt enters cooldown (disappears/disables)
+    -- Triggers prompt until it enters cooldown (disappears/disables)
     while self.Running and elapsed < timeout do
         local currentPrompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
         if not currentPrompt or not currentPrompt.Enabled or not currentPrompt.Parent then
@@ -285,7 +326,7 @@ function JobBoardDirtModule:CollectDirt(dirt: Instance)
     self:DPrint("Dirt item successfully collected & went on cooldown.")
 end
 
--- Main Automation Loop
+-- Execution Loop
 function JobBoardDirtModule:Start()
     if self.Running then return end
     self.Running = true
@@ -329,7 +370,7 @@ function JobBoardDirtModule:Start()
             while collected < neededAmount and self.Running do
                 local targetDirt = self:GetNearestDirtInZone(hrp.Position)
                 if not targetDirt then 
-                    self:DPrint("No active dirt prompts available inside zone! Waiting 2s for respawn...")
+                    self:DPrint("No active dirt prompts available inside zone! Waiting 2s for cooldowns...")
                     task.wait(2)
                     continue 
                 end
@@ -342,7 +383,7 @@ function JobBoardDirtModule:Start()
                 end
             end
             
-            -- Phase 4: Submit Completed Job & Restart
+            -- Phase 4: Submit Completed Job & Restart Cycle
             if self.Running and collected >= neededAmount then
                 self:DPrint("Target reached! Returning to Job Board to hand in...")
                 self:WalkTo(self.ReturnCFrame.Position, hrp, hum)
