@@ -178,30 +178,33 @@ end
 
 -- Poster Discovery
 function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, Instance?)
-    self:DPrint("Searching Job Board posters...")
-    for _, border in ipairs(self.JobBorders:GetChildren()) do
-        local posters = border:FindFirstChild("Border") and border.Border:FindFirstChild("Posters")
-        if posters then
-            for _, poster in ipairs(posters:GetChildren()) do
-                local infoLabel = poster:FindFirstChild("SurfaceGui", true) and poster.SurfaceGui:FindFirstChild("Info")
-                if infoLabel and infoLabel:IsA("TextLabel") then
-                    self:DPrint("Found Poster Text:", infoLabel.Text)
+    self:DPrint("Searching Job Borders for Dirt Clean posters...")
+    
+    for _, descendant in ipairs(self.JobBorders:GetDescendants()) do
+        if descendant:IsA("TextLabel") and descendant.Name == "Info" then
+            self:DPrint("Found Info TextLabel, raw text:", descendant.Text)
+            
+            -- Check if the text matches the Dirt Job format
+            if descendant.Text:find("Clean") and descendant.Text:find("Dirt") then
+                -- Extract digits from RichText tags or raw text
+                local amountStr = descendant.Text:match("<font[^>]*>(%d+)</font>") 
+                    or descendant.Text:match("Clean%s*(%d+)%s*Dirt") 
+                    or descendant.Text:match("(%d+)")
+                
+                if amountStr then
+                    local amount = tonumber(amountStr) or 0
+                    -- Locate the poster model/part ancestor and its ClickDetector
+                    local poster = descendant:FindFirstAncestorOfClass("Model") or descendant:FindFirstAncestorOfClass("BasePart")
+                    local clickDetector = poster and poster:FindFirstChildWhichIsA("ClickDetector", true)
                     
-                    local amountStr = infoLabel.Text:match("Clean%s*<font[^>]*>(%d+)</font>%s*Dirt") 
-                        or infoLabel.Text:match("Clean%s*(%d+)%s*Dirt") 
-                        or infoLabel.Text:match("(%d+)")
-                    
-                    if amountStr then
-                        local clickDetector = poster:FindFirstChildWhichIsA("ClickDetector", true)
-                        local amount = tonumber(amountStr) or 0
-                        self:DPrint("Parsed Poster! Required Dirt:", amount)
-                        return amount, clickDetector, poster
-                    end
+                    self:DPrint(string.format("Successfully parsed Poster! Required Dirt: %d | Poster: %s", amount, poster and poster:GetFullName() or "Unknown"))
+                    return amount, clickDetector, poster
                 end
             end
         end
     end
-    self:DPrint("Could not find a valid dirt job poster!")
+    
+    self:DPrint("WARNING: Could not locate a valid Job Poster with dirt requirements!")
     return 0, nil, nil
 end
 
