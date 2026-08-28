@@ -178,58 +178,64 @@ end
 
 -- Poster Discovery
 function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, Instance?)
-    self:DPrint("Searching Job Borders for Dirt Clean posters...")
+    self:DPrint("Locating main Job Board via WorldPivot...")
     
-    for _, descendant in ipairs(self.JobBorders:GetDescendants()) do
-        if descendant:IsA("TextLabel") and descendant.Name == "Info" then
-            self:DPrint("Found Info TextLabel, raw text:", descendant.Text)
+    local targetPivotPos = Vector3.new(329.766632, 103.041214, 305.412903)
+    local targetBorder: Instance? = nil
+
+    -- Find the specific Border matching the WorldPivot position
+    for _, border in ipairs(self.JobBorders:GetChildren()) do
+        local pivot = border:GetPivot()
+        if (pivot.Position - targetPivotPos).Magnitude < 1 then
+            targetBorder = border
+            break
+        end
+    end
+
+    if not targetBorder then
+        -- Fallback: Use the child directly named "Border" if pivot matching fails
+        targetBorder = self.JobBorders:FindFirstChild("Border")
+    end
+
+    if not targetBorder then
+        self:DPrint("ERROR: Could not locate the target Job Board border!")
+        return 0, nil, nil
+    end
+
+    local postersFolder = targetBorder:FindFirstChild("Posters", true)
+    if not postersFolder then
+        self:DPrint("ERROR: Could not find 'Posters' folder in target border!")
+        return 0, nil, nil
+    end
+
+    -- Dynamically fetch descendants of Posters every cycle
+    self:DPrint("Scanning posters dynamically...")
+    for _, poster in ipairs(postersFolder:GetChildren()) do
+        local surfaceGui = poster:FindFirstChildWhichIsA("SurfaceGui", true)
+        local infoLabel = surfaceGui and surfaceGui:FindFirstChild("Info")
+        
+        if infoLabel and infoLabel:IsA("TextLabel") then
+            local text = infoLabel.Text
+            self:DPrint("Checking poster text:", text)
             
-            -- Check if the text matches the Dirt Job format
-            if descendant.Text:find("Clean") and descendant.Text:find("Dirt") then
-                -- Extract digits from RichText tags or raw text
-                local amountStr = descendant.Text:match("<font[^>]*>(%d+)</font>") 
-                    or descendant.Text:match("Clean%s*(%d+)%s*Dirt") 
-                    or descendant.Text:match("(%d+)")
+            if text:find("Clean") and text:find("Dirt") then
+                -- Match digits inside RichText tags or standard string
+                local amountStr = text:match("<font[^>]*>(%d+)</font>") 
+                    or text:match("Clean%s*(%d+)%s*Dirt") 
+                    or text:match("(%d+)")
                 
                 if amountStr then
                     local amount = tonumber(amountStr) or 0
-                    -- Locate the poster model/part ancestor and its ClickDetector
-                    local poster = descendant:FindFirstAncestorOfClass("Model") or descendant:FindFirstAncestorOfClass("BasePart")
-                    local clickDetector = poster and poster:FindFirstChildWhichIsA("ClickDetector", true)
-                    
-                    self:DPrint(string.format("Successfully parsed Poster! Required Dirt: %d | Poster: %s", amount, poster and poster:GetFullName() or "Unknown"))
+                    local clickDetector = poster:FindFirstChildWhichIsA("ClickDetector", true)
+                    self:DPrint(string.format("Found valid Dirt Job! Amount: %d", amount))
                     return amount, clickDetector, poster
                 end
             end
         end
     end
-    
-    self:DPrint("WARNING: Could not locate a valid Job Poster with dirt requirements!")
+
+    self:DPrint("No active Dirt Job posters found on board.")
     return 0, nil, nil
-end
-
-function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
-    local best, bestDist = nil, math.huge
-    local totalDirts = self.DirtsFolder:GetChildren()
-    local dirtsInZone = 0
-
-    for _, d in ipairs(totalDirts) do
-        local pos = d:GetPivot().Position
-        if self:IsInsideZone(pos) then
-            dirtsInZone += 1
-            local prompt = d:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt and prompt.Enabled then
-                local dist = (pos - fromPos).Magnitude
-                if dist < bestDist then
-                    bestDist = dist
-                    best = d
-                end
-            end
-        end
-    end
-    
-    self:DPrint(string.format("Dirts inside zone: %d. Closest target dist: %.2f", dirtsInZone, bestDist))
-    return best
 end
 
 function JobBoardDirtModule:CollectDirt(dirt: Instance)
