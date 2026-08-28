@@ -5,10 +5,11 @@ JanitorModule.__index = JanitorModule
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
+
+-- Fallback check for VirtualInputManager vs standard keypress functions
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 function JanitorModule.Init(State, Toggles)
-    print("new")
     local self = setmetatable({}, JanitorModule)
     self.State = State
     self.Toggles = Toggles
@@ -25,7 +26,7 @@ function JanitorModule.Init(State, Toggles)
     self.STOP_SPEED = 1.5
     self.WAYPOINT_REACH_DIST = 1
     self.FINAL_REACH_DIST = 1
-    self.DEBUG = false
+    self.DEBUG = true -- Set to true to track Anti-AFK events in output
 
     -- Internal State
     self.Running = false
@@ -46,6 +47,23 @@ end
 
 function JanitorModule:DPrint(...)
     if self.DEBUG then print("[Janitor]", ...) end
+end
+
+local function sendKeypress()
+    local success, err = pcall(function()
+        if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+            -- Standard executor keypress fallback
+            keypress(0x57) -- 'W' Keycode
+            task.wait(0.2)
+            keyrelease(0x57)
+        else
+            -- VirtualInputManager method
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+            task.wait(0.2)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+        end
+    end)
+    return success, err
 end
 
 -- Helper Utilities
@@ -231,20 +249,7 @@ function JanitorModule:Start()
     local char = self.Player.Character or self.Player.CharacterAdded:Wait()
     local hum = char:WaitForChild("Humanoid") :: Humanoid
     local hrp = char:WaitForChild("HumanoidRootPart") :: BasePart
-    print("hello")
-    -- Background Anti-AFK Loop (Every 60s)
-    self.AntiAFKThread = task.spawn(function()
-        while self.Running do
-            task.wait(60)
-            if self.Running then
-                self:DPrint("Sending anti-AFK keypress...")
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-                task.wait(0.2)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-            end
-        end
-    end)
-    
+
     -- Movement Loop Connection
     self.MoveConnection = RunService.Heartbeat:Connect(function(dt)
         if self.MoveState.done or not self.Running then return end
@@ -256,7 +261,22 @@ function JanitorModule:Start()
         self:Stop()
     end)
 
-    
+    -- Background Anti-AFK Loop
+    self.AntiAFKThread = task.spawn(function()
+        self:DPrint("Anti-AFK Loop Started.")
+        while self.Running do
+            local ok, err = sendKeypress()
+            if ok then
+                self:DPrint("Anti-AFK keypress sent successfully.")
+            else
+                self:DPrint("Anti-AFK keypress failed:", err)
+            end
+            
+            -- Wait 60 seconds before next keypress
+            task.wait(60)
+        end
+    end)
+
     -- Main Processing Thread
     self.TaskThread = task.spawn(function()
         while self.Running do
