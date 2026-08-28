@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 function JanitorModule.Init(State, Toggles)
+    print("new")
     local self = setmetatable({}, JanitorModule)
     self.State = State
     self.Toggles = Toggles
