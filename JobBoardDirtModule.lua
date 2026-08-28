@@ -19,7 +19,7 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.DirtsFolder = self.JobsRelated:WaitForChild("Dirts")
     self.JobBorders = self.JobsRelated:WaitForChild("Job Borders")
     
-    -- Corrected Job Board Location
+    -- Job Board Position
     self.ReturnCFrame = CFrame.new(
         332.598724, 101.868713, 308.419708, 
         0.993266642, -2.84389445e-09, 0.11585056, 
@@ -176,7 +176,7 @@ function JobBoardDirtModule:WalkTo(targetPos: Vector3, hrp: BasePart, hum: Human
     self:DPrint("Reached target position.")
 end
 
--- Poster Discovery
+-- Dynamic Poster Discovery
 function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, Instance?)
     self:DPrint("Locating main Job Board via WorldPivot...")
     
@@ -220,7 +220,7 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
                 if amountStr then
                     local amount = tonumber(amountStr) or 0
                     local clickDetector = poster:FindFirstChildWhichIsA("ClickDetector", true)
-                    self:DPrint(string.format("Parsed Poster! Required Dirt: %d", amount))
+                    self:DPrint(string.format("Found Dirt Job! Required: %d", amount))
                     return amount, clickDetector, poster
                 end
             end
@@ -231,7 +231,7 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
     return 0, nil, nil
 end
 
--- Dirt Target Selection (Checked for active ProximityPrompt)
+-- Active Dirt Target Selection
 function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     local best: Instance?, bestDist = nil, math.huge
     local totalDirts = self.DirtsFolder:GetChildren()
@@ -240,7 +240,7 @@ function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     for _, d in ipairs(totalDirts) do
         local pos = d:GetPivot().Position
         if self:IsInsideZone(pos) then
-            -- Verify ProximityPrompt exists and is enabled
+            -- Verify ProximityPrompt exists, is enabled, and is active
             local prompt = d:FindFirstChildWhichIsA("ProximityPrompt", true)
             if prompt and prompt.Enabled and prompt.Parent then
                 dirtsInZone += 1
@@ -256,7 +256,8 @@ function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     self:DPrint(string.format("Active dirts with prompt in zone: %d. Nearest target dist: %.2f", dirtsInZone, bestDist))
     return best
 end
--- Collection Handler (Waits for ProximityPrompt to disappear)
+
+-- Collection Handler
 function JobBoardDirtModule:CollectDirt(dirt: Instance)
     self:DPrint("Collecting dirt item:", dirt:GetFullName())
     
@@ -265,14 +266,12 @@ function JobBoardDirtModule:CollectDirt(dirt: Instance)
     
     triggerPrompt(prompt, self.Player)
     
-    -- Keep triggering until the ProximityPrompt is removed/disabled (entering cooldown)
     local timeout = 5
     local elapsed = 0
     
+    -- Keep triggering until prompt enters cooldown (disappears/disables)
     while self.Running and elapsed < timeout do
         local currentPrompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
-        
-        -- Prompt is gone or disabled -> Dirt successfully collected
         if not currentPrompt or not currentPrompt.Enabled or not currentPrompt.Parent then
             break
         end
@@ -285,7 +284,8 @@ function JobBoardDirtModule:CollectDirt(dirt: Instance)
     task.wait(self.CONFIRM_TIME)
     self:DPrint("Dirt item successfully collected & went on cooldown.")
 end
--- Execution Loop
+
+-- Main Automation Loop
 function JobBoardDirtModule:Start()
     if self.Running then return end
     self.Running = true
@@ -303,47 +303,48 @@ function JobBoardDirtModule:Start()
 
     self.TaskThread = task.spawn(function()
         while self.Running do
-            -- Step 1: Walk to board
+            -- Phase 1: Go to Job Board
             self:DPrint("Moving to Job Board CFrame...")
             self:WalkTo(self.ReturnCFrame.Position, hrp, hum)
             
-            -- Step 2: Search for job poster
+            -- Phase 2: Find & Accept Job Poster
             local neededAmount, clickDetector, poster = self:GetRequiredDirtAmount()
             
             if clickDetector then
-                self:DPrint("Interacting with poster ClickDetector...")
+                self:DPrint("Interacting with poster ClickDetector to accept job...")
                 fireClickDetector(clickDetector)
                 task.wait(1)
             end
             
             if neededAmount <= 0 then
-                self:DPrint("No dirt needed or poster unreadable. Retrying in 3s...")
+                self:DPrint("No dirt job available right now. Retrying in 3 seconds...")
                 task.wait(3)
                 continue
             end
             
-            -- Step 3: Collect dirt within zone
+            -- Phase 3: Collect target amount of dirt items
             local collected = 0
-            self:DPrint(string.format("Collecting %d dirt items...", neededAmount))
+            self:DPrint(string.format("Job Accepted! Starting collection of %d dirt items...", neededAmount))
             
             while collected < neededAmount and self.Running do
                 local targetDirt = self:GetNearestDirtInZone(hrp.Position)
                 if not targetDirt then 
-                    self:DPrint("No valid dirt found inside defined zone bounds!")
-                    break 
+                    self:DPrint("No active dirt prompts available inside zone! Waiting 2s for respawn...")
+                    task.wait(2)
+                    continue 
                 end
                 
                 self:WalkTo(targetDirt:GetPivot().Position, hrp, hum)
                 if self.Running then
                     self:CollectDirt(targetDirt)
                     collected += 1
-                    self:DPrint(string.format("Progress: %d/%d collected.", collected, neededAmount))
+                    self:DPrint(string.format("Progress: %d/%d dirt collected.", collected, neededAmount))
                 end
             end
             
-            -- Step 4: Return to board and complete job
+            -- Phase 4: Submit Completed Job & Restart
             if self.Running and collected >= neededAmount then
-                self:DPrint("Collection complete! Returning to Job Board...")
+                self:DPrint("Target reached! Returning to Job Board to hand in...")
                 self:WalkTo(self.ReturnCFrame.Position, hrp, hum)
                 
                 if clickDetector then
@@ -351,10 +352,11 @@ function JobBoardDirtModule:Start()
                     fireClickDetector(clickDetector)
                     task.wait(1.5)
                 end
-                self:DPrint("Job cycle completed successfully!")
+                
+                self:DPrint("Job complete! Restarting cycle for next available job...\n----------------------------------")
             end
             
-            task.wait(2)
+            task.wait(1)
         end
     end)
 end
