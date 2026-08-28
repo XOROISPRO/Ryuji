@@ -5,16 +5,15 @@ JanitorModule.__index = JanitorModule
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 function JanitorModule.Init(State, Toggles)
     local self = setmetatable({}, JanitorModule)
-    
     self.State = State
     self.Toggles = Toggles
-    
     self.Player = Players.LocalPlayer
     self.DirtFolder = workspace:WaitForChild("Ignore"):WaitForChild("Interactables"):WaitForChild("JobsRelated"):WaitForChild("Janitor"):WaitForChild("Dirt")
-    
+
     -- Physics Parameters
     self.CONFIRM_TIME = 0.5
     self.POLL_TIME = 0.2
@@ -26,13 +25,14 @@ function JanitorModule.Init(State, Toggles)
     self.WAYPOINT_REACH_DIST = 1
     self.FINAL_REACH_DIST = 1
     self.DEBUG = false
-    
+
     -- Internal State
     self.Running = false
     self.MoveConnection = nil :: RBXScriptConnection?
     self.CharConnection = nil :: RBXScriptConnection?
     self.TaskThread = nil :: thread?
-    
+    self.AntiAFKThread = nil :: thread?
+
     self.MoveState = {
         velocity = Vector3.new(),
         waypoints = nil,
@@ -50,7 +50,6 @@ end
 -- Helper Utilities
 local function triggerPrompt(prompt: ProximityPrompt, player: Player)
     if not prompt or not prompt.Enabled then return end
-    
     if typeof(fireproximityprompt) == "function" then
         fireproximityprompt(prompt)
     elseif typeof(firesignal) == "function" and prompt.Triggered then
@@ -66,7 +65,7 @@ local function grounded(character: Model, root: BasePart): (boolean, Vector3?)
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {character}
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    
+
     local result = workspace:Raycast(root.Position, Vector3.new(0, -4.5, 0), rayParams)
     if result and result.Instance and result.Instance.CanCollide then
         return true, result.Position
@@ -77,13 +76,13 @@ end
 local function applyFriction(velocity: Vector3, isGrounded: boolean, friction: number, stopSpeed: number, dt: number): Vector3
     local speed = velocity.Magnitude
     if speed < 0.1 then return Vector3.new() end
-    
+
     local drop = 0
     if isGrounded then
         local control = math.max(speed, stopSpeed)
         drop = control * friction * dt
     end
-    
+
     local newSpeed = math.max(speed - drop, 0)
     if newSpeed ~= speed then
         return velocity * (newSpeed / speed)
@@ -95,7 +94,7 @@ local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, acc
     local cur = velocity:Dot(wishDir)
     local add = wishSpeed - cur
     if add <= 0 then return velocity end
-    
+
     local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
     return velocity + wishDir * accelSpeed
 end
@@ -106,45 +105,45 @@ function JanitorModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (
     if not state.waypoints or state.waypointIndex > #state.waypoints then
         return Vector3.new(), 0
     end
-    
+
     local wp = state.waypoints[state.waypointIndex]
     local wpPos = typeof(wp) == "Vector3" and wp or (wp :: PathWaypoint).Position
     local isLast = state.waypointIndex == #state.waypoints
     local reachDist = isLast and self.FINAL_REACH_DIST or self.WAYPOINT_REACH_DIST
-    
+
     local flatDelta = Vector3.new(wpPos.X - root.Position.X, 0, wpPos.Z - root.Position.Z)
-    
+
     if flatDelta.Magnitude < reachDist then
         if typeof(wp) ~= "Vector3" and (wp :: PathWaypoint).Action == Enum.PathWaypointAction.Jump then
             humanoid.Jump = true
         end
-        
+
         state.waypointIndex += 1
+
         if state.waypointIndex > #state.waypoints then
             state.velocity = Vector3.new()
             state.done = true
             return Vector3.new(), 0
         end
-        
+
         local nextWp = state.waypoints[state.waypointIndex]
         local nextPos = typeof(nextWp) == "Vector3" and nextWp or (nextWp :: PathWaypoint).Position
         flatDelta = Vector3.new(nextPos.X - root.Position.X, 0, nextPos.Z - root.Position.Z)
     end
-    
+
     if flatDelta.Magnitude < 0.01 then
         return Vector3.new(), 0
     end
-    
+
     return flatDelta.Unit, self.MAX_SPEED
 end
 
 function JanitorModule:StepMovement(root: BasePart, character: Model, wishDir: Vector3, wishSpeed: number, dt: number)
     local isGrounded = grounded(character, root)
     local accelRate = isGrounded and self.ACCEL or self.AIR_ACCEL
-    
+
     self.MoveState.velocity = applyFriction(self.MoveState.velocity, isGrounded, self.FRICTION, self.STOP_SPEED, dt)
     self.MoveState.velocity = accel(self.MoveState.velocity, wishDir, wishSpeed, accelRate, dt)
-    
     root.AssemblyLinearVelocity = Vector3.new(self.MoveState.velocity.X, root.AssemblyLinearVelocity.Y, self.MoveState.velocity.Z)
 end
 
@@ -168,15 +167,19 @@ end
 
 function JanitorModule:WaitPromptGone(dirt: Instance)
     local prompt = self:GetPrompt(dirt)
-    if prompt then triggerPrompt(prompt, self.Player) end
-    
+    if prompt then
+        triggerPrompt(prompt, self.Player)
+    end
+
     while self.Running do
         if not self:GetPrompt(dirt) then
             task.wait(self.CONFIRM_TIME)
             if not self:GetPrompt(dirt) then return end
         else
             local currentPrompt = self:GetPrompt(dirt)
-            if currentPrompt then triggerPrompt(currentPrompt, self.Player) end
+            if currentPrompt then
+                triggerPrompt(currentPrompt, self.Player)
+            end
             task.wait(self.POLL_TIME)
         end
     end
@@ -188,25 +191,29 @@ function JanitorModule:WalkTo(targetPos: Vector3, targetInstance: Instance?, cha
         AgentHeight = 5,
         AgentCanJump = true,
     })
-    
-    local ok, _ = pcall(function() path:ComputeAsync(hrp.Position, targetPos) end)
-    
+
+    local ok, _ = pcall(function()
+        path:ComputeAsync(hrp.Position, targetPos)
+    end)
+
     if ok and path.Status == Enum.PathStatus.Success then
         self.MoveState.waypoints = path:GetWaypoints()
     else
         self.MoveState.waypoints = {targetPos}
     end
-    
+
     self.MoveState.waypointIndex = 1
     self.MoveState.done = false
-    
+
     local waited = 0
     while not self.MoveState.done and self.Running do
         task.wait()
         waited += 1
         if waited % 300 == 0 and targetInstance then
             local prompt = self:GetPrompt(targetInstance)
-            if prompt then triggerPrompt(prompt, self.Player) end
+            if prompt then
+                triggerPrompt(prompt, self.Player)
+            end
         end
     end
 end
@@ -215,7 +222,10 @@ end
 function JanitorModule:Start()
     if self.Running then return end
     self.Running = true
-    if self.State then self.State.JanitorActive = true end
+
+    if self.State then
+        self.State.JanitorActive = true
+    end
 
     local char = self.Player.Character or self.Player.CharacterAdded:Wait()
     local hum = char:WaitForChild("Humanoid") :: Humanoid
@@ -232,6 +242,19 @@ function JanitorModule:Start()
         self:Stop()
     end)
 
+    -- Background Anti-AFK Loop (Every 60s)
+    self.AntiAFKThread = task.spawn(function()
+        while self.Running do
+            task.wait(60)
+            if self.Running then
+                self:DPrint("Sending anti-AFK keypress...")
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+                task.wait(0.2)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+            end
+        end
+    end)
+
     -- Main Processing Thread
     self.TaskThread = task.spawn(function()
         while self.Running do
@@ -241,8 +264,9 @@ function JanitorModule:Start()
                 task.wait(1)
                 continue
             end
-            
+
             self:WalkTo(target:GetPivot().Position, target, char, hrp, hum)
+
             if self.Running then
                 self:WaitPromptGone(target)
             end
@@ -253,7 +277,10 @@ end
 function JanitorModule:Stop()
     self.Running = false
     self.MoveState.done = true
-    if self.State then self.State.JanitorActive = false end
+
+    if self.State then
+        self.State.JanitorActive = false
+    end
 
     if self.MoveConnection then
         self.MoveConnection:Disconnect()
@@ -268,6 +295,11 @@ function JanitorModule:Stop()
     if self.TaskThread then
         task.cancel(self.TaskThread)
         self.TaskThread = nil
+    end
+
+    if self.AntiAFKThread then
+        task.cancel(self.AntiAFKThread)
+        self.AntiAFKThread = nil
     end
 end
 
