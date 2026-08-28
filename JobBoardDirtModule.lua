@@ -231,7 +231,7 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
     return 0, nil, nil
 end
 
--- Dirt Target Selection
+-- Dirt Target Selection (Checked for active ProximityPrompt)
 function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     local best: Instance?, bestDist = nil, math.huge
     local totalDirts = self.DirtsFolder:GetChildren()
@@ -240,9 +240,10 @@ function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
     for _, d in ipairs(totalDirts) do
         local pos = d:GetPivot().Position
         if self:IsInsideZone(pos) then
-            dirtsInZone += 1
+            -- Verify ProximityPrompt exists and is enabled
             local prompt = d:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt and prompt.Enabled then
+            if prompt and prompt.Enabled and prompt.Parent then
+                dirtsInZone += 1
                 local dist = (pos - fromPos).Magnitude
                 if dist < bestDist then
                     bestDist = dist
@@ -252,28 +253,38 @@ function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
         end
     end
     
-    self:DPrint(string.format("Dirts in zone: %d. Nearest target dist: %.2f", dirtsInZone, bestDist))
+    self:DPrint(string.format("Active dirts with prompt in zone: %d. Nearest target dist: %.2f", dirtsInZone, bestDist))
     return best
 end
-
+-- Collection Handler (Waits for ProximityPrompt to disappear)
 function JobBoardDirtModule:CollectDirt(dirt: Instance)
     self:DPrint("Collecting dirt item:", dirt:GetFullName())
+    
     local prompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt then 
-        triggerPrompt(prompt, self.Player) 
+    if not prompt or not prompt.Enabled then return end
+    
+    triggerPrompt(prompt, self.Player)
+    
+    -- Keep triggering until the ProximityPrompt is removed/disabled (entering cooldown)
+    local timeout = 5
+    local elapsed = 0
+    
+    while self.Running and elapsed < timeout do
+        local currentPrompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
+        
+        -- Prompt is gone or disabled -> Dirt successfully collected
+        if not currentPrompt or not currentPrompt.Enabled or not currentPrompt.Parent then
+            break
+        end
+        
+        triggerPrompt(currentPrompt, self.Player)
+        task.wait(self.POLL_TIME)
+        elapsed += self.POLL_TIME
     end
     
-    while self.Running and dirt:FindFirstChildWhichIsA("ProximityPrompt", true) do
-        local currentPrompt = dirt:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if currentPrompt then 
-            triggerPrompt(currentPrompt, self.Player) 
-        end
-        task.wait(self.POLL_TIME)
-    end
     task.wait(self.CONFIRM_TIME)
-    self:DPrint("Cleared dirt item.")
+    self:DPrint("Dirt item successfully collected & went on cooldown.")
 end
-
 -- Execution Loop
 function JobBoardDirtModule:Start()
     if self.Running then return end
