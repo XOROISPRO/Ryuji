@@ -231,18 +231,7 @@ function JanitorModule:Start()
     local char = self.Player.Character or self.Player.CharacterAdded:Wait()
     local hum = char:WaitForChild("Humanoid") :: Humanoid
     local hrp = char:WaitForChild("HumanoidRootPart") :: BasePart
-
-    -- Movement Loop Connection
-    self.MoveConnection = RunService.Heartbeat:Connect(function(dt)
-        if self.MoveState.done or not self.Running then return end
-        local wishDir, wishSpeed = self:GetWishDirFromPath(hrp, hum)
-        self:StepMovement(hrp, char, wishDir, wishSpeed, dt)
-    end)
-
-    self.CharConnection = char.Destroying:Connect(function()
-        self:Stop()
-    end)
-
+    print("hello")
     -- Background Anti-AFK Loop (Every 60s)
     self.AntiAFKThread = task.spawn(function()
         while self.Running do
@@ -255,7 +244,19 @@ function JanitorModule:Start()
             end
         end
     end)
+    
+    -- Movement Loop Connection
+    self.MoveConnection = RunService.Heartbeat:Connect(function(dt)
+        if self.MoveState.done or not self.Running then return end
+        local wishDir, wishSpeed = self:GetWishDirFromPath(hrp, hum)
+        self:StepMovement(hrp, char, wishDir, wishSpeed, dt)
+    end)
 
+    self.CharConnection = char.Destroying:Connect(function()
+        self:Stop()
+    end)
+
+    
     -- Main Processing Thread
     self.TaskThread = task.spawn(function()
         while self.Running do
