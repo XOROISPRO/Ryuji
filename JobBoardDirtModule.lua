@@ -19,7 +19,7 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.DirtsFolder = self.JobsRelated:WaitForChild("Dirts")
     self.JobBorders = self.JobsRelated:WaitForChild("Job Borders")
     
-    -- Updated Correct Job Board Location
+    -- Corrected Job Board Location
     self.ReturnCFrame = CFrame.new(
         332.598724, 101.868713, 308.419708, 
         0.993266642, -2.84389445e-09, 0.11585056, 
@@ -176,7 +176,7 @@ function JobBoardDirtModule:WalkTo(targetPos: Vector3, hrp: BasePart, hum: Human
     self:DPrint("Reached target position.")
 end
 
--- Poster Discovery
+-- Flexible Poster Discovery
 function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, Instance?)
     self:DPrint("Searching Job Borders for Dirt Clean posters...")
     
@@ -184,16 +184,13 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
         if descendant:IsA("TextLabel") and descendant.Name == "Info" then
             self:DPrint("Found Info TextLabel, raw text:", descendant.Text)
             
-            -- Check if the text matches the Dirt Job format
             if descendant.Text:find("Clean") and descendant.Text:find("Dirt") then
-                -- Extract digits from RichText tags or raw text
                 local amountStr = descendant.Text:match("<font[^>]*>(%d+)</font>") 
                     or descendant.Text:match("Clean%s*(%d+)%s*Dirt") 
                     or descendant.Text:match("(%d+)")
                 
                 if amountStr then
                     local amount = tonumber(amountStr) or 0
-                    -- Locate the poster model/part ancestor and its ClickDetector
                     local poster = descendant:FindFirstAncestorOfClass("Model") or descendant:FindFirstAncestorOfClass("BasePart")
                     local clickDetector = poster and poster:FindFirstChildWhichIsA("ClickDetector", true)
                     
@@ -261,7 +258,7 @@ function JobBoardDirtModule:Start()
     local hrp = char:WaitForChild("HumanoidRootPart") :: BasePart
 
     self.MoveConnection = RunService.Heartbeat:Connect(function(dt)
-        if self.MoveState.done or not self.Running then return end
+        if self.MoveState.done or not self.Running me return end
         local wishDir, wishSpeed = self:GetWishDirFromPath(hrp, hum)
         self:StepMovement(hrp, char, wishDir, wishSpeed, dt)
     end)
