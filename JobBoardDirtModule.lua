@@ -19,7 +19,7 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.DirtsFolder = self.JobsRelated:WaitForChild("Dirts")
     self.JobBorders = self.JobsRelated:WaitForChild("Job Borders")
     
-    -- Updated Correct Job Board Location
+    -- Corrected Job Board Location
     self.ReturnCFrame = CFrame.new(
         332.598724, 101.868713, 308.419708, 
         0.993266642, -2.84389445e-09, 0.11585056, 
@@ -183,43 +183,36 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
     local targetPivotPos = Vector3.new(329.766632, 103.041214, 305.412903)
     local targetBorder: Instance? = nil
 
-    -- Find the specific Border matching the WorldPivot position
     for _, border in ipairs(self.JobBorders:GetChildren()) do
         local pivot = border:GetPivot()
-        if (pivot.Position - targetPivotPos).Magnitude < 1 then
+        if (pivot.Position - targetPivotPos).Magnitude < 2 then
             targetBorder = border
             break
         end
     end
 
     if not targetBorder then
-        -- Fallback: Use the child directly named "Border" if pivot matching fails
         targetBorder = self.JobBorders:FindFirstChild("Border")
     end
 
     if not targetBorder then
-        self:DPrint("ERROR: Could not locate the target Job Board border!")
+        self:DPrint("ERROR: Could not locate target board!")
         return 0, nil, nil
     end
 
     local postersFolder = targetBorder:FindFirstChild("Posters", true)
     if not postersFolder then
-        self:DPrint("ERROR: Could not find 'Posters' folder in target border!")
+        self:DPrint("ERROR: 'Posters' folder missing!")
         return 0, nil, nil
     end
 
-    -- Dynamically fetch descendants of Posters every cycle
-    self:DPrint("Scanning posters dynamically...")
     for _, poster in ipairs(postersFolder:GetChildren()) do
         local surfaceGui = poster:FindFirstChildWhichIsA("SurfaceGui", true)
         local infoLabel = surfaceGui and surfaceGui:FindFirstChild("Info")
         
         if infoLabel and infoLabel:IsA("TextLabel") then
             local text = infoLabel.Text
-            self:DPrint("Checking poster text:", text)
-            
             if text:find("Clean") and text:find("Dirt") then
-                -- Match digits inside RichText tags or standard string
                 local amountStr = text:match("<font[^>]*>(%d+)</font>") 
                     or text:match("Clean%s*(%d+)%s*Dirt") 
                     or text:match("(%d+)")
@@ -227,15 +220,40 @@ function JobBoardDirtModule:GetRequiredDirtAmount(): (number, ClickDetector?, In
                 if amountStr then
                     local amount = tonumber(amountStr) or 0
                     local clickDetector = poster:FindFirstChildWhichIsA("ClickDetector", true)
-                    self:DPrint(string.format("Found valid Dirt Job! Amount: %d", amount))
+                    self:DPrint(string.format("Parsed Poster! Required Dirt: %d", amount))
                     return amount, clickDetector, poster
                 end
             end
         end
     end
 
-    self:DPrint("No active Dirt Job posters found on board.")
+    self:DPrint("No active Dirt Job posters found.")
     return 0, nil, nil
+end
+
+-- Dirt Target Selection
+function JobBoardDirtModule:GetNearestDirtInZone(fromPos: Vector3): Instance?
+    local best: Instance?, bestDist = nil, math.huge
+    local totalDirts = self.DirtsFolder:GetChildren()
+    local dirtsInZone = 0
+
+    for _, d in ipairs(totalDirts) do
+        local pos = d:GetPivot().Position
+        if self:IsInsideZone(pos) then
+            dirtsInZone += 1
+            local prompt = d:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt and prompt.Enabled then
+                local dist = (pos - fromPos).Magnitude
+                if dist < bestDist then
+                    bestDist = dist
+                    best = d
+                end
+            end
+        end
+    end
+    
+    self:DPrint(string.format("Dirts in zone: %d. Nearest target dist: %.2f", dirtsInZone, bestDist))
+    return best
 end
 
 function JobBoardDirtModule:CollectDirt(dirt: Instance)
