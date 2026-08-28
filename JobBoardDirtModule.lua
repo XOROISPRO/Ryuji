@@ -5,6 +5,7 @@ JobBoardDirtModule.__index = JobBoardDirtModule
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 function JobBoardDirtModule.Init(State, Toggles)
     local self = setmetatable({}, JobBoardDirtModule)
@@ -44,6 +45,7 @@ function JobBoardDirtModule.Init(State, Toggles)
     self.Running = false
     self.MoveConnection = nil :: RBXScriptConnection?
     self.TaskThread = nil :: thread?
+    self.AntiAFKThread = nil :: thread?
     
     self.MoveState = {
         velocity = Vector3.new(),
@@ -342,6 +344,19 @@ function JobBoardDirtModule:Start()
         self:StepMovement(hrp, char, wishDir, wishSpeed, dt)
     end)
 
+    -- Background Anti-AFK Loop (Every 60s)
+    self.AntiAFKThread = task.spawn(function()
+        while self.Running do
+            task.wait(60)
+            if self.Running then
+                self:DPrint("Sending anti-AFK keypress...")
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+                task.wait(0.2)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+            end
+        end
+    end)
+
     self.TaskThread = task.spawn(function()
         while self.Running do
             -- Phase 1: Go to Job Board
@@ -415,6 +430,11 @@ function JobBoardDirtModule:Stop()
     if self.TaskThread then
         task.cancel(self.TaskThread)
         self.TaskThread = nil
+    end
+
+    if self.AntiAFKThread then
+        task.cancel(self.AntiAFKThread)
+        self.AntiAFKThread = nil
     end
 end
 
