@@ -34,8 +34,8 @@ function JobBoardDirtModule.Init(State, Toggles)
     -- Custom Physics Parameters
     self.CONFIRM_TIME = 0.5
     self.POLL_TIME = 0.2
-    self.MAX_SPEED = 24
-    self.ACCEL = 10
+    self.MAX_SPEED = 35
+    self.ACCEL = 25
     self.AIR_ACCEL = 2
     self.FRICTION = 6
     self.STOP_SPEED = 1.5
