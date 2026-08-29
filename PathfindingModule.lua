@@ -1,188 +1,216 @@
 --!strict
 local PathfindingService = game:GetService("PathfindingService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 
 local localPlayer = Players.LocalPlayer
-local camera = Workspace.CurrentCamera
-
 local PathfindingModule = {}
 
--- Constants
-local TARGET_CFRAME = CFrame.new(
-	665.411133, 101.890839, -898.212219,
-	0.712382495, 5.50751338e-08, -0.701791406,
-	-8.13938499e-08, 1, -4.14428092e-09,
-	0.701791406, 6.00738161e-08, 0.712382495
-)
-
+-- Engine Configuration Parameters
 local PATH_PARAMS = {
-	AgentRadius = 3.5,
-	AgentHeight = 5.5,
+	AgentRadius = 2.5,
+	AgentHeight = 5,
 	AgentCanJump = true,
-	WaypointSpacing = 4,
+	WaypointSpacing = 3,
 }
 
-local PHYSICS_CFG = { targetSpeed = 55, groundAccel = 30, friction = 4, stopSpeed = 5 }
-local DEFAULT_WALKSPEED = 16
+local PHYSICS_CFG = {
+	targetSpeed = 35,
+	groundAccel = 25,
+	airAccel = 2,
+	friction = 6,
+	stopSpeed = 1.5,
+	waypointReachDist = 1.5,
+	finalReachDist = 2.0,
+}
 
-function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any)
+function PathfindingModule.Init(State: any, Toggles: any)
 	local Module = {}
 
-	local function getChar(): (Model, Humanoid, BasePart)
-		local char = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-		local hum = char:WaitForChild("Humanoid") :: Humanoid
-		local root = char:WaitForChild("HumanoidRootPart") :: BasePart
+	local function getChar(): (Model?, Humanoid?, BasePart?)
+		local char = localPlayer.Character
+		if not char then return nil, nil, nil end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
 		return char, hum, root
 	end
 
-	local function setKeyState(keyCode: Enum.KeyCode, press: boolean)
-		if State.ActiveKeys[keyCode] == press then return end
-		State.ActiveKeys[keyCode] = press
-		VirtualInputManager:SendKeyEvent(press, keyCode, false, game)
+	local function grounded(character: Model, root: BasePart): boolean
+		local rayParams = RaycastParams.new()
+		rayParams.FilterDescendantsInstances = {character}
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+		local result = Workspace:Raycast(root.Position, Vector3.new(0, -4.5, 0), rayParams)
+		return result ~= nil and result.Instance ~= nil and result.Instance.CanCollide
 	end
 
-	local function releaseAllKeys()
-		for key, isPressed in pairs(State.ActiveKeys) do
-			if isPressed then
-				VirtualInputManager:SendKeyEvent(false, key, false, game)
-				State.ActiveKeys[key] = false
-			end
-		end
-	end
+	local function applyFriction(velocity: Vector3, isGrounded: boolean, dt: number): Vector3
+		local speed = velocity.Magnitude
+		if speed < 0.1 then return Vector3.zero end
 
-	local function applyFriction(dt: number)
-		local speed = State.Velocity.Magnitude
-		if speed < 0.1 then
-			State.Velocity = Vector3.zero
-			return
+		local drop = 0
+		if isGrounded then
+			local control = math.max(speed, PHYSICS_CFG.stopSpeed)
+			drop = control * PHYSICS_CFG.friction * dt
 		end
-		local control = math.max(speed, PHYSICS_CFG.stopSpeed)
-		local drop = control * PHYSICS_CFG.friction * dt
+
 		local newSpeed = math.max(speed - drop, 0)
 		if newSpeed ~= speed then
-			State.Velocity = State.Velocity * (newSpeed / speed)
+			return velocity * (newSpeed / speed)
 		end
+		return velocity
 	end
 
-	local function accel(wishDir: Vector3, wishSpeed: number, dt: number)
-		local cur = State.Velocity:Dot(wishDir)
+	local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, isGrounded: boolean, dt: number): Vector3
+		local cur = velocity:Dot(wishDir)
 		local add = wishSpeed - cur
-		if add <= 0 then return end
-		local accelSpeed = math.min(PHYSICS_CFG.groundAccel * dt * wishSpeed, add)
-		State.Velocity = State.Velocity + (wishDir * accelSpeed)
+		if add <= 0 then return velocity end
+
+		local accelRate = isGrounded and PHYSICS_CFG.groundAccel or PHYSICS_CFG.airAccel
+		local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
+		return velocity + (wishDir * accelSpeed)
+	end
+
+	local function calculateYVelocity(currentY: number, targetY: number): number
+		local heightDiff = targetY - currentY
+		if heightDiff > 0.5 then
+			return math.sqrt(2 * Workspace.Gravity * (heightDiff + 1.5))
+		end
+		return 0
 	end
 
 	function Module.StopPathfinding()
 		State.Navigating = false
-		releaseAllKeys()
 		State.Velocity = Vector3.zero
+
 		local _, hum, root = getChar()
 		if root then
 			root.AssemblyLinearVelocity = Vector3.zero
 		end
 		if hum then
 			hum.PlatformStand = false
-			hum.WalkSpeed = DEFAULT_WALKSPEED
 		end
-		for key, conn in pairs(State.Connections) do
-			conn:Disconnect()
-			State.Connections[key] = nil
+
+		if State.Connections then
+			for key, conn in pairs(State.Connections) do
+				conn:Disconnect()
+				State.Connections[key] = nil
+			end
 		end
-		
+
 		if Toggles and Toggles.NavToggle then
 			Toggles.NavToggle:SetValue(false)
 		end
 	end
 
-	function Module.NavigateToCFrame(targetCFrame: CFrame, onArrivalCallback: (() -> ())?)
+	-- Universal WalkTo method: Accepts Vector3 or CFrame positions
+	function Module.WalkTo(target: Vector3 | CFrame, onArrivalCallback: (() -> ())?): boolean
 		Module.StopPathfinding()
-		TrainModule.EnsureMacroState(false)
-		TrainModule.UnequipAllTools()
-		State.Navigating = true
-		if Toggles and Toggles.NavToggle then Toggles.NavToggle:SetValue(true) end
 
-		local _, humanoid, root = getChar()
+		local targetPos = typeof(target) == "CFrame" and target.Position or target
+		local char, humanoid, root = getChar()
+
+		if not char or not humanoid or not root then
+			return false
+		end
+
+		State.Navigating = true
+		if Toggles and Toggles.NavToggle then
+			Toggles.NavToggle:SetValue(true)
+		end
+
 		humanoid.PlatformStand = true
 
-		State.CurrentPath = PathfindingService:CreatePath(PATH_PARAMS)
-		local waypoints = {}
-		local success, err
+		local waypoints = nil
+		local attempts = 0
 
-		for attempt = 1, 3 do
-			success, err = pcall(function()
-				State.CurrentPath:ComputeAsync(root.Position, targetCFrame.Position)
+		-- Persistent Pathfinding Computation (No straight-line fallbacks)
+		while State.Navigating do
+			attempts += 1
+			local path = PathfindingService:CreatePath(PATH_PARAMS)
+
+			local ok, _ = pcall(function()
+				path:ComputeAsync(root.Position, targetPos)
 			end)
-			if success and State.CurrentPath.Status == Enum.PathStatus.Success then
-				waypoints = State.CurrentPath:GetWaypoints()
-				if #waypoints > 0 then break end
+
+			if ok and path.Status == Enum.PathStatus.Success then
+				local wps = path:GetWaypoints()
+				if #wps > 0 then
+					waypoints = wps
+					break
+				end
 			end
-			task.wait(0.2)
+
+			-- Unstick jump pop every 3 failed pathing attempts
+			if attempts % 3 == 0 and root then
+				root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 45, root.AssemblyLinearVelocity.Z)
+			end
+
+			task.wait(0.3)
 		end
 
-		if not success or #waypoints == 0 then
-			warn("[Pathfinding Engine] Path computation failed. Fallback executed.")
-			Module.StopPathfinding()
-			if onArrivalCallback then onArrivalCallback() end
-			return
+		if not State.Navigating or not waypoints then
+			return false
 		end
 
-		local currentWaypointIndex = 2
-
-		State.Connections["Blocked"] = State.CurrentPath.Blocked:Connect(function(blockedIndex)
-			if blockedIndex >= currentWaypointIndex and State.Navigating then
-				Module.NavigateToCFrame(targetCFrame, onArrivalCallback)
-			end
-		end)
+		local currentWaypointIndex = 1
+		local forceJump = false
+		local targetY: number? = nil
 
 		State.Connections["Heartbeat"] = RunService.Heartbeat:Connect(function(dt)
-			if not State.Navigating then return end
-			
-			-- OPERATION: MOVEMENT (Strict Macro Lock)
-			TrainModule.EnsureMacroState(false)
+			if not State.Navigating or not root or not char then return end
 
 			if currentWaypointIndex > #waypoints then
-				releaseAllKeys()
-				root.CFrame = CFrame.new(root.Position) * targetCFrame.Rotation
 				Module.StopPathfinding()
-				task.defer(function()
-					TrainModule.TryRemoteBuy()
-					if onArrivalCallback then onArrivalCallback() end
-				end)
+				if typeof(target) == "CFrame" then
+					root.CFrame = CFrame.new(root.Position) * target.Rotation
+				end
+				if onArrivalCallback then
+					onArrivalCallback()
+				end
 				return
 			end
 
-			local currentPos = root.Position
-			local targetPos = waypoints[currentWaypointIndex].Position
-			local flatTarget = Vector3.new(targetPos.X, 0, targetPos.Z)
-			local flatCurrent = Vector3.new(currentPos.X, 0, currentPos.Z)
+			local wp = waypoints[currentWaypointIndex]
+			local wpPos = wp.Position
+			targetY = wpPos.Y
 
-			if (flatTarget - flatCurrent).Magnitude <= 1.5 then
+			local isLast = currentWaypointIndex == #waypoints
+			local reachDist = isLast and PHYSICS_CFG.finalReachDist or PHYSICS_CFG.waypointReachDist
+
+			local flatDelta = Vector3.new(wpPos.X - root.Position.X, 0, wpPos.Z - root.Position.Z)
+
+			if flatDelta.Magnitude < reachDist then
+				if wp.Action == Enum.PathWaypointAction.Jump then
+					forceJump = true
+				end
+
 				currentWaypointIndex += 1
-				return
+				if currentWaypointIndex > #waypoints then return end
+
+				local nextWp = waypoints[currentWaypointIndex]
+				targetY = nextWp.Position.Y
+				flatDelta = Vector3.new(nextWp.Position.X - root.Position.X, 0, nextWp.Position.Z - root.Position.Z)
 			end
 
-			local moveDirection = (flatTarget - flatCurrent).Unit
-			local camCFrame = camera.CFrame
-			local camLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-			local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+			local moveDirection = flatDelta.Magnitude > 0.01 and flatDelta.Unit or Vector3.zero
+			local isGrounded = grounded(char, root)
 
-			local forwardDot = moveDirection:Dot(camLook)
-			local rightDot = moveDirection:Dot(camRight)
+			State.Velocity = applyFriction(State.Velocity, isGrounded, dt)
+			State.Velocity = accel(State.Velocity, moveDirection, PHYSICS_CFG.targetSpeed, isGrounded, dt)
 
-			setKeyState(Enum.KeyCode.W, forwardDot > 0.3)
-			setKeyState(Enum.KeyCode.S, forwardDot < -0.3)
-			setKeyState(Enum.KeyCode.D, rightDot > 0.3)
-			setKeyState(Enum.KeyCode.A, rightDot < -0.3)
-
-			if waypoints[currentWaypointIndex].Action == Enum.PathWaypointAction.Jump or (targetPos.Y - currentPos.Y) > 2 then
-				if humanoid.FloorMaterial ~= Enum.Material.Air then
-					setKeyState(Enum.KeyCode.Space, true)
-					task.delay(0.1, function()
-						setKeyState(Enum.KeyCode.Space, false)
-					end)
+			-- Dynamic Y Velocity Calculation
+			local yVel = root.AssemblyLinearVelocity.Y
+			if isGrounded then
+				if forceJump then
+					yVel = 45
+					forceJump = false
+				elseif targetY then
+					local dynamicBoost = calculateYVelocity(root.Position.Y, targetY)
+					if dynamicBoost > 0 then
+						yVel = dynamicBoost
+					end
 				end
 			end
 
@@ -190,14 +218,17 @@ function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any)
 				root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, root.Position + moveDirection), dt * 10)
 			end
 
-			applyFriction(dt)
-			accel(moveDirection, PHYSICS_CFG.targetSpeed, dt)
-			State.Velocity = Vector3.new(State.Velocity.X, root.AssemblyLinearVelocity.Y, State.Velocity.Z)
-			root.AssemblyLinearVelocity = State.Velocity
+			root.AssemblyLinearVelocity = Vector3.new(State.Velocity.X, yVel, State.Velocity.Z)
 		end)
+
+		-- Block thread until arrival or cancellation
+		while State.Navigating do
+			task.wait()
+		end
+
+		return true
 	end
 
-	Module.TARGET_CFRAME = TARGET_CFRAME
 	return Module
 end
 
