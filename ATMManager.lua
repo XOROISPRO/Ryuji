@@ -1,5 +1,6 @@
 --!strict
 --a
+print("new")
 local ATMManager = {}
 ATMManager.__index = ATMManager
 
