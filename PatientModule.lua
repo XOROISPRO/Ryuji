@@ -255,7 +255,7 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
             task.wait(6)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
 
-            if holdingW and waited < 600 and not self.MoveState.done and self.Running do
+            if holdingW and waited < 600 and not self.MoveState.done and self.Running then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
             end
         end
