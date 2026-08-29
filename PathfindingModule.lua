@@ -4,40 +4,41 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 
-local LocalPlayer = Players.LocalPlayer
-
-export type PhysicsConfig = {
-	TargetSpeed: number,
-	GroundAccel: number,
-	AirAccel: number,
-	Friction: number,
-	StopSpeed: number,
-	WaypointReachDist: number,
-	FinalReachDist: number,
-}
+local localPlayer = Players.LocalPlayer
 
 local PathfindingModule = {}
 PathfindingModule.__index = PathfindingModule
 
-local DEFAULT_PHYSICS: PhysicsConfig = {
-	TargetSpeed = 35,
-	GroundAccel = 25,
-	AirAccel = 2,
-	Friction = 6,
-	StopSpeed = 1.5,
-	WaypointReachDist = 1.5,
-	FinalReachDist = 2.0,
-}
+-- Target vendor navigation destination
+PathfindingModule.TARGET_CFRAME = CFrame.new(866.421997, 101.868713, -921.240356)
 
-local DEFAULT_PATH_PARAMS = {
+local PATH_PARAMS = {
 	AgentRadius = 2.5,
 	AgentHeight = 5,
 	AgentCanJump = true,
 	WaypointSpacing = 3,
 }
 
--- Private Physics Helpers
-local function isGrounded(character: Model, root: BasePart): boolean
+local PHYSICS_CFG = {
+	targetSpeed = 35,
+	groundAccel = 25,
+	airAccel = 2,
+	friction = 6,
+	stopSpeed = 1.5,
+	waypointReachDist = 1.5,
+	finalReachDist = 2.0,
+}
+
+-- Private Internal Helpers
+local function getChar(): (Model?, Humanoid?, BasePart?)
+	local char = localPlayer.Character
+	if not char then return nil, nil, nil end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
+	return char, hum, root
+end
+
+local function grounded(character: Model, root: BasePart): boolean
 	local rayParams = RaycastParams.new()
 	rayParams.FilterDescendantsInstances = { character }
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -45,16 +46,14 @@ local function isGrounded(character: Model, root: BasePart): boolean
 	return result ~= nil and result.Instance ~= nil and result.Instance.CanCollide
 end
 
-local function applyFriction(velocity: Vector3, grounded: boolean, config: PhysicsConfig, dt: number): Vector3
+local function applyFriction(velocity: Vector3, isGrounded: boolean, dt: number): Vector3
 	local speed = velocity.Magnitude
 	if speed < 0.1 then return Vector3.zero end
-	
 	local drop = 0
-	if grounded then
-		local control = math.max(speed, config.StopSpeed)
-		drop = control * config.Friction * dt
+	if isGrounded then
+		local control = math.max(speed, PHYSICS_CFG.stopSpeed)
+		drop = control * PHYSICS_CFG.friction * dt
 	end
-	
 	local newSpeed = math.max(speed - drop, 0)
 	if newSpeed ~= speed then
 		return velocity * (newSpeed / speed)
@@ -62,14 +61,13 @@ local function applyFriction(velocity: Vector3, grounded: boolean, config: Physi
 	return velocity
 end
 
-local function applyAccel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, grounded: boolean, config: PhysicsConfig, dt: number): Vector3
-	local currentSpeed = velocity:Dot(wishDir)
-	local addSpeed = wishSpeed - currentSpeed
-	if addSpeed <= 0 then return velocity end
-	
-	local accelRate = grounded and config.GroundAccel or config.AirAccel
-	local accelAmount = math.min(accelRate * dt * wishSpeed, addSpeed)
-	return velocity + (wishDir * accelAmount)
+local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, isGrounded: boolean, dt: number): Vector3
+	local cur = velocity:Dot(wishDir)
+	local add = wishSpeed - cur
+	if add <= 0 then return velocity end
+	local accelRate = isGrounded and PHYSICS_CFG.groundAccel or PHYSICS_CFG.airAccel
+	local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
+	return velocity + (wishDir * accelSpeed)
 end
 
 local function calculateYVelocity(currentY: number, targetY: number): number
@@ -80,42 +78,61 @@ local function calculateYVelocity(currentY: number, targetY: number): number
 	return 0
 end
 
--- Constructor
-function PathfindingModule.new(customPhysics: PhysicsConfig?)
+function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any?)
 	local self = setmetatable({}, PathfindingModule)
-	self.PhysicsConfig = customPhysics or DEFAULT_PHYSICS
-	self.ActiveConnection = nil :: RBXScriptConnection?
-	self.IsNavigating = false
-	self.CurrentVelocity = Vector3.zero
+	self.State = State
+	self.Toggles = Toggles
+	self.TrainModule = TrainModule
 	return self
 end
 
--- Core Path Execution (Asynchronous Task)
-function PathfindingModule:WalkToAsync(target: Vector3 | CFrame, shouldCancelCallback: (() -> boolean)?): boolean
-	self:Stop()
+function PathfindingModule:StopPathfinding()
+	self.State.Navigating = false
+	self.State.Velocity = Vector3.zero
 	
-	local char = LocalPlayer.Character
-	if not char then return false end
-	local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	if not root or not hum then return false end
+	local _, hum, root = getChar()
+	if root then root.AssemblyLinearVelocity = Vector3.zero end
+	if hum then hum.PlatformStand = false end
+	
+	if self.State.Connections then
+		for key, conn in pairs(self.State.Connections) do
+			conn:Disconnect()
+			self.State.Connections[key] = nil
+		end
+	end
+	
+	if self.Toggles and self.Toggles.NavToggle then
+		self.Toggles.NavToggle:SetValue(false)
+	end
+end
+
+-- Universal Path Calculation and Execution Engine
+function PathfindingModule:WalkTo(target: Vector3 | CFrame, onArrivalCallback: (() -> ())?): boolean
+	self:StopPathfinding()
+	
+	-- Disables training macro prior to movement execution
+	if self.TrainModule and self.TrainModule.VerifyMacroDisabled then
+		self.TrainModule.VerifyMacroDisabled()
+	end
 
 	local targetPos = typeof(target) == "CFrame" and target.Position or target
-	self.IsNavigating = true
-	hum.PlatformStand = true
+	local char, humanoid, root = getChar()
+	if not char or not humanoid or not root then return false end
+
+	self.State.Navigating = true
+	if self.Toggles and self.Toggles.NavToggle then
+		self.Toggles.NavToggle:SetValue(true)
+	end
+	
+	humanoid.PlatformStand = true
 
 	local waypoints: { PathWaypoint }? = nil
 	local attempts = 0
 
-	-- Path Calculation & Dynamic Recovery
-	while self.IsNavigating do
-		if shouldCancelCallback and shouldCancelCallback() then
-			self:Stop()
-			return false
-		end
-		
+	-- Compute Path with Dynamic Unstick Recovery
+	while self.State.Navigating do
 		attempts += 1
-		local path = PathfindingService:CreatePath(DEFAULT_PATH_PARAMS)
+		local path = PathfindingService:CreatePath(PATH_PARAMS)
 		local ok, _ = pcall(function()
 			path:ComputeAsync(root.Position, targetPos)
 		end)
@@ -128,39 +145,36 @@ function PathfindingModule:WalkToAsync(target: Vector3 | CFrame, shouldCancelCal
 			end
 		end
 
-		-- Apply vertical unstick boost every 3 failed attempts
-		if attempts % 3 == 0 then
+		if attempts % 3 == 0 and root then
 			root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 45, root.AssemblyLinearVelocity.Z)
 		end
 		task.wait(0.3)
 	end
 
-	if not self.IsNavigating or not waypoints then return false end
+	if not self.State.Navigating or not waypoints then return false end
 
 	local currentWaypointIndex = 1
 	local forceJump = false
-	local doneSignal = Instance.new("BindableEvent")
+	local targetY: number? = nil
 
-	self.ActiveConnection = RunService.Heartbeat:Connect(function(dt)
-		if not self.IsNavigating or not root or not char or (shouldCancelCallback and shouldCancelCallback()) then
-			self:Stop()
-			doneSignal:Fire(false)
-			return
-		end
+	self.State.Connections["Heartbeat"] = RunService.Heartbeat:Connect(function(dt)
+		if not self.State.Navigating or not root or not char then return end
 
 		if currentWaypointIndex > #waypoints then
-			self:Stop()
+			self:StopPathfinding()
 			if typeof(target) == "CFrame" then
 				root.CFrame = CFrame.new(root.Position) * target.Rotation
 			end
-			doneSignal:Fire(true)
+			if onArrivalCallback then onArrivalCallback() end
 			return
 		end
 
 		local wp = waypoints[currentWaypointIndex]
 		local wpPos = wp.Position
-		local isLast = (currentWaypointIndex == #waypoints)
-		local reachDist = isLast and self.PhysicsConfig.FinalReachDist or self.PhysicsConfig.WaypointReachDist
+		targetY = wpPos.Y
+
+		local isLast = currentWaypointIndex == #waypoints
+		local reachDist = isLast and PHYSICS_CFG.finalReachDist or PHYSICS_CFG.waypointReachDist
 		local flatDelta = Vector3.new(wpPos.X - root.Position.X, 0, wpPos.Z - root.Position.Z)
 
 		if flatDelta.Magnitude < reachDist then
@@ -169,27 +183,26 @@ function PathfindingModule:WalkToAsync(target: Vector3 | CFrame, shouldCancelCal
 			end
 			currentWaypointIndex += 1
 			if currentWaypointIndex > #waypoints then return end
-			
+
 			local nextWp = waypoints[currentWaypointIndex]
-			wpPos = nextWp.Position
-			flatDelta = Vector3.new(wpPos.X - root.Position.X, 0, wpPos.Z - root.Position.Z)
+			targetY = nextWp.Position.Y
+			flatDelta = Vector3.new(nextWp.Position.X - root.Position.X, 0, nextWp.Position.Z - root.Position.Z)
 		end
 
 		local moveDirection = flatDelta.Magnitude > 0.01 and flatDelta.Unit or Vector3.zero
-		local groundedState = isGrounded(char, root)
+		local isGrounded = grounded(char, root)
 
-		self.CurrentVelocity = applyFriction(self.CurrentVelocity, groundedState, self.PhysicsConfig, dt)
-		self.CurrentVelocity = applyAccel(self.CurrentVelocity, moveDirection, self.PhysicsConfig.TargetSpeed, groundedState, self.PhysicsConfig, dt)
+		self.State.Velocity = applyFriction(self.State.Velocity, isGrounded, dt)
+		self.State.Velocity = accel(self.State.Velocity, moveDirection, PHYSICS_CFG.targetSpeed, isGrounded, dt)
 
-		-- Dynamic Y-Velocity Execution
 		local yVel = root.AssemblyLinearVelocity.Y
-		if groundedState then
+		if isGrounded then
 			if forceJump then
 				yVel = 45
 				forceJump = false
-			else
-				local boost = calculateYVelocity(root.Position.Y, wpPos.Y)
-				if boost > 0 then yVel = boost end
+			elseif targetY then
+				local dynamicBoost = calculateYVelocity(root.Position.Y, targetY)
+				if dynamicBoost > 0 then yVel = dynamicBoost end
 			end
 		end
 
@@ -197,30 +210,20 @@ function PathfindingModule:WalkToAsync(target: Vector3 | CFrame, shouldCancelCal
 			root.CFrame = root.CFrame:Lerp(CFrame.lookAt(root.Position, root.Position + moveDirection), dt * 10)
 		end
 
-		root.AssemblyLinearVelocity = Vector3.new(self.CurrentVelocity.X, yVel, self.CurrentVelocity.Z)
+		root.AssemblyLinearVelocity = Vector3.new(self.State.Velocity.X, yVel, self.State.Velocity.Z)
 	end)
 
-	local success = doneSignal.Event:Wait()
-	doneSignal:Destroy()
-	return success
+	-- Synchronous yield until destination reached or stopped
+	while self.State.Navigating do
+		task.wait()
+	end
+	return true
 end
 
-function PathfindingModule:Stop()
-	self.IsNavigating = false
-	self.CurrentVelocity = Vector3.zero
-	
-	if self.ActiveConnection then
-		self.ActiveConnection:Disconnect()
-		self.ActiveConnection = nil
-	end
-
-	local char = LocalPlayer.Character
-	if char then
-		local root = char:FindFirstChild("HumanoidRootPart") :: BasePart?
-		local hum = char:FindFirstChildOfClass("Humanoid")
-		if root then root.AssemblyLinearVelocity = Vector3.zero end
-		if hum then hum.PlatformStand = false end
-	end
+function PathfindingModule:NavigateToCFrame(targetCFrame: CFrame, onArrivalCallback: (() -> ())?)
+	task.spawn(function()
+		self:WalkTo(targetCFrame, onArrivalCallback)
+	end)
 end
 
 return PathfindingModule
