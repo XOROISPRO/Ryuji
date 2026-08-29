@@ -3,7 +3,7 @@ local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
-
+print("bruh")
 local localPlayer = Players.LocalPlayer
 
 local PathfindingModule = {}
