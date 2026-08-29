@@ -101,10 +101,19 @@ end
 
 function ATMModule:Start(onComplete: (() -> ())?)
 	if self.Running then return end
+	
+	-- Guard against PathfindingModule missing reference
+	if not self.PathfindingModule or type(self.PathfindingModule.WalkTo) ~= "function" then
+		warn("[ATM Service] Cannot start: PathfindingModule is nil or invalid!")
+		return
+	end
+
 	self.Running = true
 
 	self.TaskThread = task.spawn(function()
 		self:DPrint("Starting ATM Sequence...")
+		
+		-- Safely invoke WalkTo on the pathfinder instance
 		local arrived = self.PathfindingModule:WalkTo(self.ATM_STAND_CFRAME)
 		if not arrived or not self.Running then return end
 
@@ -122,7 +131,11 @@ end
 
 function ATMModule:Stop()
 	self.Running = false
-	self.PathfindingModule:StopPathfinding()
+	
+	if self.PathfindingModule and type(self.PathfindingModule.StopPathfinding) == "function" then
+		self.PathfindingModule:StopPathfinding()
+	end
+	
 	if self.TaskThread then
 		task.cancel(self.TaskThread)
 		self.TaskThread = nil
