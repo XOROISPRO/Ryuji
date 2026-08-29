@@ -61,22 +61,27 @@ function PathfindingModule.Init(State: any, Toggles: any, TrainModule: any?)
 end
 
 function PathfindingModule:StopPathfinding()
-	self.State.Navigating = false
+	-- Guard against calling as dot-syntax or uninitialized state
+	local selfTable = (type(self) == "table" and self.State) and self or PathfindingModule
+	
+	if selfTable.State then
+		selfTable.State.Navigating = false
+	end
 	
 	local _, _, root = getChar()
 	if root then 
 		root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
 	end
 	
-	if self.State.Connections then
-		for key, conn in pairs(self.State.Connections) do
-			conn:Disconnect()
-			self.State.Connections[key] = nil
+	if selfTable.State and selfTable.State.Connections then
+		for key, conn in pairs(selfTable.State.Connections) do
+			if conn then conn:Disconnect() end
+			selfTable.State.Connections[key] = nil
 		end
 	end
 	
-	if self.Toggles and self.Toggles.NavToggle then
-		self.Toggles.NavToggle:SetValue(false)
+	if selfTable.Toggles and selfTable.Toggles.NavToggle then
+		selfTable.Toggles.NavToggle:SetValue(false)
 	end
 end
 
