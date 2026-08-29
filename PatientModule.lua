@@ -5,7 +5,6 @@ PatientModule.__index = PatientModule
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
 -- Ensure compatibility with environments supporting fireproximityprompt
@@ -51,6 +50,8 @@ function PatientModule.Init(State, Toggles)
 		waypoints = nil,
 		waypointIndex = 1,
 		done = true,
+		targetY = nil :: number?,
+		forceJump = false,
 	}
 
 	return self
@@ -99,6 +100,14 @@ local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, acc
 
 	local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
 	return velocity + wishDir * accelSpeed
+end
+
+local function calculateYVelocity(currentY: number, targetY: number, gravity: number): number
+	local heightDiff = targetY - currentY
+	if heightDiff > 0.5 then
+		return math.sqrt(2 * gravity * (heightDiff + 1.5))
+	end
+	return 0
 end
 
 -- Spatial & Instance Utilities
@@ -153,14 +162,17 @@ function PatientModule:NearestInRoom(fromPos: Vector3, roomCFrame: CFrame): Mode
 end
 
 -- Custom Physics Movement Mechanics
-function PatientModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (Vector3, number)
+function PatientModule:GetWishDirFromPath(root: BasePart): (Vector3, number)
 	local state = self.MoveState
 	if not state.waypoints or state.waypointIndex > #state.waypoints then
+		state.targetY = nil
 		return Vector3.new(), 0
 	end
 
 	local wp = state.waypoints[state.waypointIndex]
 	local wpPos = typeof(wp) == "Vector3" and wp or (wp :: PathWaypoint).Position
+	state.targetY = wpPos.Y
+
 	local isLast = state.waypointIndex == #state.waypoints
 	local reachDist = isLast and self.FINAL_REACH_DIST or self.WAYPOINT_REACH_DIST
 
@@ -168,18 +180,20 @@ function PatientModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (
 
 	if flatDelta.Magnitude < reachDist then
 		if typeof(wp) ~= "Vector3" and (wp :: PathWaypoint).Action == Enum.PathWaypointAction.Jump then
-			humanoid.Jump = true
+			state.forceJump = true
 		end
 
 		state.waypointIndex += 1
 		if state.waypointIndex > #state.waypoints then
 			state.velocity = Vector3.new()
 			state.done = true
+			state.targetY = nil
 			return Vector3.new(), 0
 		end
 
 		local nextWp = state.waypoints[state.waypointIndex]
 		local nextPos = typeof(nextWp) == "Vector3" and nextWp or (nextWp :: PathWaypoint).Position
+		state.targetY = nextPos.Y
 		flatDelta = Vector3.new(nextPos.X - root.Position.X, 0, nextPos.Z - root.Position.Z)
 	end
 
@@ -197,9 +211,23 @@ function PatientModule:StepMovement(root: BasePart, character: Model, wishDir: V
 	self.MoveState.velocity = applyFriction(self.MoveState.velocity, isGrounded, self.FRICTION, self.STOP_SPEED, dt)
 	self.MoveState.velocity = accel(self.MoveState.velocity, wishDir, wishSpeed, accelRate, dt)
 
+	local yVel = root.AssemblyLinearVelocity.Y
+
+	if isGrounded then
+		if self.MoveState.forceJump then
+			yVel = 45
+			self.MoveState.forceJump = false
+		elseif self.MoveState.targetY then
+			local dynamicBoost = calculateYVelocity(root.Position.Y, self.MoveState.targetY, workspace.Gravity)
+			if dynamicBoost > 0 then
+				yVel = dynamicBoost
+			end
+		end
+	end
+
 	root.AssemblyLinearVelocity = Vector3.new(
 		self.MoveState.velocity.X,
-		root.AssemblyLinearVelocity.Y,
+		yVel,
 		self.MoveState.velocity.Z
 	)
 end
@@ -210,7 +238,6 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 	local wps = nil
 	local attempts = 0
 
-	-- Retries pathfinding until a valid path is returned (strictly avoids single-waypoint straight lines)
 	while self.Running do
 		attempts += 1
 		local path = PathfindingService:CreatePath({
@@ -232,19 +259,15 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 			end
 		end
 
-		self:DPrint(("path FAILED (attempt %d, status=%s, err=%s), retrying pathfinding..."):format(
+		self:DPrint(("path FAILED (attempt %d, status=%s, err=%s), retrying..."):format(
 			attempts,
 			path and tostring(path.Status) or "nil",
 			tostring(err)
 		))
 
-		-- Force jump/unstick nudge after repeated failures
 		if attempts % 3 == 0 then
-			self:DPrint("Attempting jump nudge to escape stuck position...")
-			hum.Jump = true
-			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-			task.wait(0.1)
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+			self:DPrint("Path blocked; applying dynamic Y-velocity unstick boost.")
+			hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 45, hrp.AssemblyLinearVelocity.Z)
 		end
 
 		task.wait(0.3)
@@ -255,36 +278,10 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 	self.MoveState.waypoints = wps
 	self.MoveState.waypointIndex = 1
 	self.MoveState.done = false
+	self.MoveState.forceJump = false
 
-	local holdingW = not isRetry
-	if holdingW then
-		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-	end
-
-	local waited = 0
 	while not self.MoveState.done and self.Running do
 		task.wait()
-		waited += 1
-
-		if waited >= 600 and holdingW then
-			self:DPrint("Reached over 600 frames in motion; releasing W key to prevent collision.")
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-			holdingW = false
-		end
-
-		if waited % 300 == 0 then
-			self:DPrint("Still walking Space Initiated.")
-			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-			task.wait(0.1)
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-			if holdingW and waited < 600 and not self.MoveState.done and self.Running then
-				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-			end
-		end
-	end
-
-	if holdingW then
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
 	end
 
 	self:DPrint("walkTo finished")
@@ -301,7 +298,6 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
 		retries += 1
 		self:DPrint(("Interacting with patient (Attempt %d): %s"):format(retries, patient:GetFullName()))
 
-		-- Direct interaction call replacing key inputs
 		fireproximityprompt(prompt)
 
 		local elapsed = 0
@@ -320,10 +316,8 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
 			return
 		end
 
-		self:DPrint("Interaction unconfirmed. Initiating retry sequence...")
-		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-		task.wait(0.1)
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+		self:DPrint("Interaction unconfirmed. Retrying with small positional pop...")
+		hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 35, hrp.AssemblyLinearVelocity.Z)
 		task.wait(0.5)
 
 		if retries >= self.MAX_INTERACT_RETRIES then
@@ -371,7 +365,7 @@ function PatientModule:Start()
 	-- Movement Loop Connection
 	self.MoveConnection = RunService.Heartbeat:Connect(function(dt)
 		if self.MoveState.done or not self.Running then return end
-		local wishDir, wishSpeed = self:GetWishDirFromPath(hrp, hum)
+		local wishDir, wishSpeed = self:GetWishDirFromPath(hrp)
 		self:StepMovement(hrp, char, wishDir, wishSpeed, dt)
 	end)
 
@@ -386,17 +380,6 @@ function PatientModule:Start()
 
 	self.CharConnection = char.Destroying:Connect(function()
 		self:Stop()
-	end)
-
-	-- Background Anti-AFK Loop (Every 60s)
-	self.AntiAFKThread = task.spawn(function()
-		self:DPrint("Anti-AFK Loop Started.")
-		while self.Running do
-			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-			task.wait(0.2)
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-			task.wait(60)
-		end
 	end)
 
 	-- Main Processing Thread
@@ -457,8 +440,6 @@ function PatientModule:Stop()
 	if self.State then
 		self.State.PatientActive = false
 	end
-
-	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
 
 	if self.MoveConnection then
 		self.MoveConnection:Disconnect()
