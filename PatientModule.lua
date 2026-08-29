@@ -1,24 +1,17 @@
 --!strict
---!strict
 local PatientModule = {}
 PatientModule.__index = PatientModule
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
--- Require your PathfindingModule here (adjust path if needed, e.g., script.Parent.PathfindingModule)
-local PathfindingModule = require(script.Parent:WaitForChild("PathfindingModule"))
-
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
 
-function PatientModule.Init(State: any, Toggles: any)
+function PatientModule.Init(State: any, Toggles: any, PathfindingEngine: any)
 	local self = setmetatable({}, PatientModule)
 	self.State = State
 	self.Toggles = Toggles
-	
-	-- Automatically initialize the engine inside PatientModule!
-	self.PathEngine = PathfindingModule.Init(State, Toggles)
-
+	self.PathEngine = PathfindingEngine
 	self.Player = Players.LocalPlayer
 	self.PatientFolder = workspace:WaitForChild("Ignore"):WaitForChild("NPCs"):WaitForChild("Miscs")
 
@@ -124,7 +117,6 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart)
 			break
 		end
 
-		-- Re-navigate to patient position via Universal Engine
 		self.PathEngine.WalkTo(patient:GetPivot().Position)
 	end
 end
@@ -194,7 +186,9 @@ end
 
 function PatientModule:Stop()
 	self.Running = false
-	self.PathEngine.StopPathfinding()
+	if self.PathEngine and self.PathEngine.StopPathfinding then
+		self.PathEngine.StopPathfinding()
+	end
 
 	if self.InputConnection then
 		self.InputConnection:Disconnect()
