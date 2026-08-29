@@ -208,10 +208,11 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 	self:DPrint("walkTo called, target =", tostring(targetPos), "isRetry =", tostring(isRetry))
 
 	local wps = nil
-	local pathAttempts = 0
+	local attempts = 0
 
-	-- Keep trying until a valid path is successfully computed (No straight-line fallback)
+	-- Retries pathfinding until a valid path is returned (strictly avoids single-waypoint straight lines)
 	while self.Running do
+		attempts += 1
 		local path = PathfindingService:CreatePath({
 			AgentRadius = 2,
 			AgentHeight = 5,
@@ -223,27 +224,30 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 		end)
 
 		if ok and path.Status == Enum.PathStatus.Success then
-			wps = path:GetWaypoints()
-			self:DPrint(("path computed, %d waypoints"):format(#wps))
-			break
-		else
-			pathAttempts += 1
-			self:DPrint(("path FAILED (attempt %d, status=%s), retrying pathfinding..."):format(
-				pathAttempts,
-				path and tostring(path.Status) or "nil"
-			))
-
-			-- Nudge character with a jump if pathfinding keeps failing
-			if pathAttempts % 3 == 0 then
-				self:DPrint("Path blocked repeatedly; forcing a jump nudge.")
-				hum.Jump = true
-				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-				task.wait(0.1)
-				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+			local waypoints = path:GetWaypoints()
+			if #waypoints > 0 then
+				wps = waypoints
+				self:DPrint(("path computed on attempt %d: %d waypoints"):format(attempts, #wps))
+				break
 			end
-
-			task.wait(0.5)
 		end
+
+		self:DPrint(("path FAILED (attempt %d, status=%s, err=%s), retrying pathfinding..."):format(
+			attempts,
+			path and tostring(path.Status) or "nil",
+			tostring(err)
+		))
+
+		-- Force jump/unstick nudge after repeated failures
+		if attempts % 3 == 0 then
+			self:DPrint("Attempting jump nudge to escape stuck position...")
+			hum.Jump = true
+			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+			task.wait(0.1)
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+		end
+
+		task.wait(0.3)
 	end
 
 	if not self.Running or not wps then return end
