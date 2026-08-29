@@ -4,7 +4,6 @@ PatientModule.__index = PatientModule
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
 local firesignal = firesignal or function(signal)
@@ -19,21 +18,18 @@ local firesignal = firesignal or function(signal)
 	end
 end
 
--- Robust UI button click helper using Activated + VirtualInput click fallback
+-- Uses Roblox's native button:Activate()
 local function triggerGuiActivation(button: Instance)
 	if not button or not button:IsA("GuiButton") then return end
 	
-	-- Primary: Fire Activated signal directly
+	-- Standard Roblox method
+	pcall(function()
+		(button :: GuiButton):Activate()
+	end)
+
+	-- Direct Activated signal backup for custom UI listeners
 	if firesignal and button.Activated then
 		firesignal(button.Activated)
-	end
-	
-	-- Secondary Fallback: Simulate hardware UI Click if UI position is visible
-	if button:IsA("GuiObject") and button.AbsolutePosition and button.AbsoluteSize then
-		local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
-		VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
-		task.wait(0.05)
-		VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
 	end
 end
 
@@ -71,7 +67,7 @@ function PatientModule:DPrint(...)
 	if self.DEBUG then print("[Patient Service]", ...) end
 end
 
--- 1. Handles moving to Makima, opening dialogue, and choosing Option 1
+-- Handles moving to Makima, opening dialogue, and choosing Option 1
 function PatientModule:InitializeSequence(): boolean
 	self:DPrint("Running Makima Initializer Sequence...")
 	
@@ -96,19 +92,19 @@ function PatientModule:InitializeSequence(): boolean
 		self:DPrint("Failed to locate DialogueProx inside Makima!")
 		return false
 	end
-
+	task.wait(1)
 	-- Trigger dialogue prompt
 	fireproximityprompt(dialogueProx)
 	task.wait(1.5)
 
-	-- Fire Option 1 in HUD Dialogue via Activated
+	-- Activate Option 1 in HUD Dialogue
 	local playerGui = self.Player:WaitForChild("PlayerGui")
 	local optionsFolder = playerGui:WaitForChild("HUD"):WaitForChild("Main"):WaitForChild("Dialogue"):WaitForChild("Options")
 	local optionOne = optionsFolder:WaitForChild("1", 5)
 	task.wait(4)
 	if optionOne then
 		triggerGuiActivation(optionOne)
-		self:DPrint("Successfully activated Makima dialogue (Option 1).")
+		self:DPrint("Successfully activated Makima dialogue via :Activate().")
 		task.wait(1.5)
 		return true
 	else
