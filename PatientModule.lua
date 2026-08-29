@@ -23,7 +23,7 @@ function PatientModule.Init(State, Toggles)
     self.MIN_Y_HEIGHT = 140
     self.LOWER_ROOM_B_CFRAME = CFrame.new(1183.53284, 115.798248, -510.988892, 0, 1, 0, 1, 0, 0, 0, 0, -1)
     self.LOWER_ROOM_C_CFRAME = CFrame.new(1183.53284, 115.798248, -402.588745, 0, 1, 0, 1, 0, 0, 0, 0, -1)
-    self.ROOM_SIZE = Vector3.new(43, 43, 43)
+    self.ROOM_SIZE = Vector3.new(43, 30, 43)
 
     -- Execution Parameters
     self.MAX_INTERACT_RETRIES = 5
