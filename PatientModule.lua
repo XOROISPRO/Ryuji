@@ -4,6 +4,7 @@ PatientModule.__index = PatientModule
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
 local firesignal = firesignal or function(signal)
@@ -15,6 +16,24 @@ local firesignal = firesignal or function(signal)
 				connection.Function()
 			end
 		end
+	end
+end
+
+-- Robust UI button click helper using Activated + VirtualInput click fallback
+local function triggerGuiActivation(button: Instance)
+	if not button or not button:IsA("GuiButton") then return end
+	
+	-- Primary: Fire Activated signal directly
+	if firesignal and button.Activated then
+		firesignal(button.Activated)
+	end
+	
+	-- Secondary Fallback: Simulate hardware UI Click if UI position is visible
+	if button:IsA("GuiObject") and button.AbsolutePosition and button.AbsoluteSize then
+		local center = button.AbsolutePosition + (button.AbsoluteSize / 2)
+		VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+		task.wait(0.05)
+		VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
 	end
 end
 
@@ -82,17 +101,14 @@ function PatientModule:InitializeSequence(): boolean
 	fireproximityprompt(dialogueProx)
 	task.wait(1.5)
 
-	-- Fire Option 1 in HUD Dialogue
+	-- Fire Option 1 in HUD Dialogue via Activated
 	local playerGui = self.Player:WaitForChild("PlayerGui")
 	local optionsFolder = playerGui:WaitForChild("HUD"):WaitForChild("Main"):WaitForChild("Dialogue"):WaitForChild("Options")
 	local optionOne = optionsFolder:WaitForChild("1", 5)
-	task.wait(4)
+
 	if optionOne then
-		if optionOne:IsA("GuiButton") and firesignal then
-			firesignal(optionOne.MouseButton1Click)
-			firesignal(optionOne.Activated)
-		end
-		self:DPrint("Successfully initiated Makima dialogue (Option 1).")
+		triggerGuiActivation(optionOne)
+		self:DPrint("Successfully activated Makima dialogue (Option 1).")
 		task.wait(1.5)
 		return true
 	else
@@ -208,7 +224,6 @@ function PatientModule:Start()
 	end)
 
 	self.TaskThread = task.spawn(function()
-		-- Always execute initialization before servicing patients
 		local initOk = self:InitializeSequence()
 		if not initOk or not self.Running then return end
 
