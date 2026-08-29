@@ -33,8 +33,8 @@ function PatientModule.Init(State, Toggles)
     self.AIR_ACCEL = 2
     self.FRICTION = 6
     self.STOP_SPEED = 1.5
-    self.WAYPOINT_REACH_DIST = 2.5 -- Increased to prevent overshooting corners
-    self.FINAL_REACH_DIST = 3.0    -- Increased clearance for final arrival
+    self.WAYPOINT_REACH_DIST = 2.0
+    self.FINAL_REACH_DIST = 2.5
     self.DEBUG = true
 
     -- Internal Threading & Connections
@@ -61,7 +61,7 @@ function PatientModule:DPrint(...)
     end
 end
 
--- Helper Physics & Navigation Utilities
+-- Helper Physics Utilities
 local function grounded(character: Model, root: BasePart): (boolean, Vector3?)
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {character}
@@ -100,15 +100,34 @@ local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, acc
     return velocity + wishDir * accelSpeed
 end
 
--- Wall Line-of-Sight Check
-function PatientModule:HasDirectPath(startPos: Vector3, endPos: Vector3, character: Model): boolean
+-- Raycast Obstacle Avoidance calculation
+function PatientModule:GetSteeredDirection(startPos: Vector3, targetPos: Vector3, character: Model): Vector3
+    local desiredDir = (Vector3.new(targetPos.X, startPos.Y, targetPos.Z) - startPos).Unit
+    if desiredDir.Magnitude == 0 then return Vector3.new() end
+
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {character, self.PatientFolder}
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-    local dir = endPos - startPos
-    local result = workspace:Raycast(startPos, dir, rayParams)
-    return result == nil
+    local checkDist = 5
+    local centerHit = workspace:Raycast(startPos, desiredDir * checkDist, rayParams)
+
+    if not centerHit then
+        return desiredDir
+    end
+
+    -- Test angles to step around wall
+    local angles = {30, -30, 60, -60, 90, -90, 120, -120}
+    for _, angle in ipairs(angles) do
+        local rad = math.rad(angle)
+        local rotatedDir = CFrame.Angles(0, rad, 0):VectorToWorldSpace(desiredDir)
+        local hit = workspace:Raycast(startPos, rotatedDir * checkDist, rayParams)
+        if not hit then
+            return rotatedDir
+        end
+    end
+
+    return desiredDir
 end
 
 -- Spatial & Instance Utilities
@@ -197,7 +216,9 @@ function PatientModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (
         return Vector3.new(), 0
     end
 
-    return flatDelta.Unit, self.MAX_SPEED
+    -- Apply active steering around obstacles to prevent rubbing against walls
+    local moveDir = self:GetSteeredDirection(root.Position, wpPos, root.Parent :: Model)
+    return moveDir, self.MAX_SPEED
 end
 
 function PatientModule:StepMovement(root: BasePart, character: Model, wishDir: Vector3, wishSpeed: number, dt: number)
@@ -220,10 +241,10 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
     local char = hrp.Parent :: Model
 
     local path = PathfindingService:CreatePath({
-        AgentRadius = 3.5, -- Increased radius to maintain distance from walls
-        AgentHeight = 5,
-        AgentCanJump = true,
-        WaypointSpacing = 4,
+        AgentRadius = 2.0,
+        AgentHeight = 5.0,
+        AgentCanJump = false,
+        WaypointSpacing = 3.0,
     })
 
     local ok, err = pcall(function()
@@ -232,18 +253,12 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 
     if ok and path.Status == Enum.PathStatus.Success then
         local wps = path:GetWaypoints()
-        self:DPrint(("path computed, %d waypoints"):format(#wps))
+        self:DPrint(("path computed successfully, %d waypoints"):format(#wps))
         self.MoveState.waypoints = wps
     else
-        -- Only use direct approach if there are NO walls between character and target
-        if self:HasDirectPath(hrp.Position, targetPos, char) then
-            self:DPrint("Path failed but direct path is clear of walls. Using fallback.")
-            self.MoveState.waypoints = {targetPos}
-        else
-            self:DPrint("Path FAILED and wall detected in direct line. Movement aborted to prevent wall walking.")
-            self.MoveState.done = true
-            return
-        end
+        self:DPrint("PathfindingService failed to compute standard path. Utilizing Steered Direct Fallback.")
+        -- Fall back to steered waypoints calculated dynamically
+        self.MoveState.waypoints = {targetPos}
     end
 
     self.MoveState.waypointIndex = 1
@@ -254,26 +269,15 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
     end
 
-    local waited = 0
+    local timeout = 0
     while not self.MoveState.done and self.Running do
         task.wait()
-        waited += 1
+        timeout += 1
 
-        if waited >= 600 and holdingW then
-            self:DPrint("Reached over 600 frames in motion; releasing W key.")
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-            holdingW = false
-        end
-
-        if waited % 300 == 0 then
-            self:DPrint("Still walking Space Initiated.")
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-            task.wait(0.1)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-
-            if holdingW and waited < 600 and not self.MoveState.done and self.Running then
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-            end
+        -- Prevent being stuck indefinitely trying to navigate around geometry
+        if timeout >= 300 then
+            self:DPrint("Navigation timeout reached for current target. Cancelling move.")
+            break
         end
     end
 
@@ -281,6 +285,7 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
     end
 
+    self.MoveState.done = true
     self:DPrint("walkTo finished")
 end
 
@@ -312,12 +317,6 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
             self:DPrint("Patient interaction successful and verified.")
             return
         end
-
-        self:DPrint("Interaction unconfirmed. Initiating retry sequence...")
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-        task.wait(0.1)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        task.wait(0.5)
 
         if retries >= self.MAX_INTERACT_RETRIES then
             self:DPrint("Max retry attempts reached for patient:", patient:GetFullName())
