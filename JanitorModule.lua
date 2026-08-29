@@ -265,7 +265,7 @@ function JanitorModule:Start()
     self.AntiAFKThread = task.spawn(function()
         self:DPrint("Anti-AFK Loop Started.")
         while self.Running do
-            task.wait(180) -- Send every 3 minutes
+            task.wait(60) -- Send every minute
             if self.Running then
                 pcall(function()
                     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
