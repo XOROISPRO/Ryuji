@@ -14,7 +14,7 @@ function ATMManager.Init(State, Toggles, PatientModule, ATMModule)
 
     self.Running = false
     self.IsProcessing = false
-    self.TargetThreshold = 100000 -- Set threshold (100k or 1m)
+    self.TargetThreshold = 1000000 -- Set threshold (100k or 1m)
     self.WatcherThread = nil :: thread?
 
     return self
