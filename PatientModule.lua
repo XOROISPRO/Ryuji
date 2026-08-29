@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
+-- Ensure compatibility with environments supporting fireproximityprompt
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
 
 function PatientModule.Init(State, Toggles)
@@ -33,8 +34,8 @@ function PatientModule.Init(State, Toggles)
     self.AIR_ACCEL = 2
     self.FRICTION = 6
     self.STOP_SPEED = 1.5
-    self.WAYPOINT_REACH_DIST = 2.0
-    self.FINAL_REACH_DIST = 2.5
+    self.WAYPOINT_REACH_DIST = 1.5
+    self.FINAL_REACH_DIST = 2
     self.DEBUG = true
 
     -- Internal Threading & Connections
@@ -98,36 +99,6 @@ local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, acc
 
     local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
     return velocity + wishDir * accelSpeed
-end
-
--- Raycast Obstacle Avoidance calculation
-function PatientModule:GetSteeredDirection(startPos: Vector3, targetPos: Vector3, character: Model): Vector3
-    local desiredDir = (Vector3.new(targetPos.X, startPos.Y, targetPos.Z) - startPos).Unit
-    if desiredDir.Magnitude == 0 then return Vector3.new() end
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {character, self.PatientFolder}
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-    local checkDist = 5
-    local centerHit = workspace:Raycast(startPos, desiredDir * checkDist, rayParams)
-
-    if not centerHit then
-        return desiredDir
-    end
-
-    -- Test angles to step around wall
-    local angles = {30, -30, 60, -60, 90, -90, 120, -120}
-    for _, angle in ipairs(angles) do
-        local rad = math.rad(angle)
-        local rotatedDir = CFrame.Angles(0, rad, 0):VectorToWorldSpace(desiredDir)
-        local hit = workspace:Raycast(startPos, rotatedDir * checkDist, rayParams)
-        if not hit then
-            return rotatedDir
-        end
-    end
-
-    return desiredDir
 end
 
 -- Spatial & Instance Utilities
@@ -216,9 +187,7 @@ function PatientModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (
         return Vector3.new(), 0
     end
 
-    -- Apply active steering around obstacles to prevent rubbing against walls
-    local moveDir = self:GetSteeredDirection(root.Position, wpPos, root.Parent :: Model)
-    return moveDir, self.MAX_SPEED
+    return flatDelta.Unit, self.MAX_SPEED
 end
 
 function PatientModule:StepMovement(root: BasePart, character: Model, wishDir: Vector3, wishSpeed: number, dt: number)
@@ -238,13 +207,10 @@ end
 function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePart, hum: Humanoid)
     self:DPrint("walkTo called, target =", tostring(targetPos), "isRetry =", tostring(isRetry))
 
-    local char = hrp.Parent :: Model
-
     local path = PathfindingService:CreatePath({
-        AgentRadius = 2.0,
-        AgentHeight = 5.0,
-        AgentCanJump = false,
-        WaypointSpacing = 3.0,
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
     })
 
     local ok, err = pcall(function()
@@ -253,11 +219,12 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
 
     if ok and path.Status == Enum.PathStatus.Success then
         local wps = path:GetWaypoints()
-        self:DPrint(("path computed successfully, %d waypoints"):format(#wps))
+        self:DPrint(("path computed, %d waypoints"):format(#wps))
         self.MoveState.waypoints = wps
     else
-        self:DPrint("PathfindingService failed to compute standard path. Utilizing Steered Direct Fallback.")
-        -- Fall back to steered waypoints calculated dynamically
+        self:DPrint(("path FAILED (ok=%s status=%s err=%s), using straight-line fallback"):format(
+            tostring(ok), path and tostring(path.Status) or "nil", tostring(err)
+        ))
         self.MoveState.waypoints = {targetPos}
     end
 
@@ -269,15 +236,26 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
     end
 
-    local timeout = 0
+    local waited = 0
     while not self.MoveState.done and self.Running do
         task.wait()
-        timeout += 1
+        waited += 1
 
-        -- Prevent being stuck indefinitely trying to navigate around geometry
-        if timeout >= 300 then
-            self:DPrint("Navigation timeout reached for current target. Cancelling move.")
-            break
+        if waited >= 600 and holdingW then
+            self:DPrint("Reached over 600 frames in motion; releasing W key to prevent collision.")
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+            holdingW = false
+        end
+
+        if waited % 300 == 0 then
+            self:DPrint("Still walking Space Initiated.")
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+            task.wait(0.1)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            
+            if holdingW and waited < 600 and not self.MoveState.done and self.Running then
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+            end
         end
     end
 
@@ -285,7 +263,6 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
     end
 
-    self.MoveState.done = true
     self:DPrint("walkTo finished")
 end
 
@@ -300,6 +277,7 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
         retries += 1
         self:DPrint(("Interacting with patient (Attempt %d): %s"):format(retries, patient:GetFullName()))
 
+        -- Direct interaction call replacing key inputs
         fireproximityprompt(prompt)
 
         local elapsed = 0
@@ -317,6 +295,12 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
             self:DPrint("Patient interaction successful and verified.")
             return
         end
+
+        self:DPrint("Interaction unconfirmed. Initiating retry sequence...")
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+        task.wait(0.1)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        task.wait(0.5)
 
         if retries >= self.MAX_INTERACT_RETRIES then
             self:DPrint("Max retry attempts reached for patient:", patient:GetFullName())
