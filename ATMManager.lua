@@ -1,4 +1,5 @@
 --!strict
+--a
 local ATMManager = {}
 ATMManager.__index = ATMManager
 
