@@ -206,29 +206,49 @@ end
 
 function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePart, hum: Humanoid)
 	self:DPrint("walkTo called, target =", tostring(targetPos), "isRetry =", tostring(isRetry))
-	local path = PathfindingService:CreatePath({
-		AgentRadius = 2,
-		AgentHeight = 5,
-		AgentCanJump = true,
-	})
 
-	local ok, err = pcall(function()
-		path:ComputeAsync(hrp.Position, targetPos)
-	end)
+	local wps = nil
+	local pathAttempts = 0
 
-	if ok and path.Status == Enum.PathStatus.Success then
-		local wps = path:GetWaypoints()
-		self:DPrint(("path computed, %d waypoints"):format(#wps))
-		self.MoveState.waypoints = wps
-	else
-		self:DPrint(("path FAILED (ok=%s status=%s err=%s), using straight-line fallback"):format(
-			tostring(ok),
-			path and tostring(path.Status) or "nil",
-			tostring(err)
-		))
-		self.MoveState.waypoints = {targetPos}
+	-- Keep trying until a valid path is successfully computed (No straight-line fallback)
+	while self.Running do
+		local path = PathfindingService:CreatePath({
+			AgentRadius = 2,
+			AgentHeight = 5,
+			AgentCanJump = true,
+		})
+
+		local ok, err = pcall(function()
+			path:ComputeAsync(hrp.Position, targetPos)
+		end)
+
+		if ok and path.Status == Enum.PathStatus.Success then
+			wps = path:GetWaypoints()
+			self:DPrint(("path computed, %d waypoints"):format(#wps))
+			break
+		else
+			pathAttempts += 1
+			self:DPrint(("path FAILED (attempt %d, status=%s), retrying pathfinding..."):format(
+				pathAttempts,
+				path and tostring(path.Status) or "nil"
+			))
+
+			-- Nudge character with a jump if pathfinding keeps failing
+			if pathAttempts % 3 == 0 then
+				self:DPrint("Path blocked repeatedly; forcing a jump nudge.")
+				hum.Jump = true
+				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+				task.wait(0.1)
+				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+			end
+
+			task.wait(0.5)
+		end
 	end
 
+	if not self.Running or not wps then return end
+
+	self.MoveState.waypoints = wps
 	self.MoveState.waypointIndex = 1
 	self.MoveState.done = false
 
