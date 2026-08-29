@@ -77,24 +77,25 @@ function ATMModule:ExecuteATMTransaction()
 	local atmTab = playerGui:WaitForChild("HUD"):WaitForChild("Tabs"):WaitForChild("ATM")
 
 	-- 1. Deposit 1,000,000
+	task.wait(2)
 	local amountBox = atmTab:WaitForChild("AmountBox") :: TextBox
 	amountBox.Text = "1000000"
-	task.wait(0.1)
+	task.wait(2)
 	clickGuiButton(atmTab:WaitForChild("Deposit"))
-	task.wait(0.5)
 
-	-- 2. Transfer Tab
+	-- 2. Switch to Transfer Tab
+	task.wait(2)
 	clickGuiButton(atmTab:WaitForChild("Transfer"))
-	task.wait(0.5)
 
 	-- 3. Fill Details & Confirm
+	task.wait(2)
 	local transferFrame = atmTab:WaitForChild("TransferFrame")
 	local transferAmountBox = transferFrame:WaitForChild("AmountBox") :: TextBox
 	local usernameBox = transferFrame:WaitForChild("Username") :: TextBox
 	transferAmountBox.Text = "1000000"
 	usernameBox.Text = "jotla13"
-	task.wait(0.2)
-
+	
+	task.wait(2)
 	clickGuiButton(transferFrame:WaitForChild("Confirm"))
 	self:DPrint("ATM Transfer Complete.")
 end
@@ -102,7 +103,6 @@ end
 function ATMModule:Start(onComplete: (() -> ())?)
 	if self.Running then return end
 	
-	-- Guard against PathfindingModule missing reference
 	if not self.PathfindingModule or type(self.PathfindingModule.WalkTo) ~= "function" then
 		warn("[ATM Service] Cannot start: PathfindingModule is nil or invalid!")
 		return
@@ -113,18 +113,19 @@ function ATMModule:Start(onComplete: (() -> ())?)
 	self.TaskThread = task.spawn(function()
 		self:DPrint("Starting ATM Sequence...")
 		
-		-- Safely invoke WalkTo on the pathfinder instance
 		local arrived = self.PathfindingModule:WalkTo(self.ATM_STAND_CFRAME)
 		if not arrived or not self.Running then return end
 
 		local clickDetector = self:FindTargetATM()
 		if clickDetector and fireclickdetector then
 			fireclickdetector(clickDetector)
-			task.wait(0.8)
+			task.wait(2)
 			if self.Running then self:ExecuteATMTransaction() end
 		end
 
-		self:Stop()
+		self.Running = false
+		self.TaskThread = nil
+		
 		if onComplete then onComplete() end
 	end)
 end
@@ -136,7 +137,8 @@ function ATMModule:Stop()
 		self.PathfindingModule:StopPathfinding()
 	end
 	
-	if self.TaskThread then
+	-- Only cancel thread if called externally (not from inside self.TaskThread)
+	if self.TaskThread and coroutine.running() ~= self.TaskThread then
 		task.cancel(self.TaskThread)
 		self.TaskThread = nil
 	end
