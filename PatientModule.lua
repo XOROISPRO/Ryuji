@@ -86,7 +86,7 @@ function PatientModule:InitializeSequence(): boolean
 	local playerGui = self.Player:WaitForChild("PlayerGui")
 	local optionsFolder = playerGui:WaitForChild("HUD"):WaitForChild("Main"):WaitForChild("Dialogue"):WaitForChild("Options")
 	local optionOne = optionsFolder:WaitForChild("1", 5)
-
+	task.wait(3)
 	if optionOne then
 		if optionOne:IsA("GuiButton") and firesignal then
 			firesignal(optionOne.MouseButton1Click)
