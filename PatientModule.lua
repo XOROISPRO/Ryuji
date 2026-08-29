@@ -8,20 +8,23 @@ local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
+-- Ensure compatibility with environments supporting fireproximityprompt
+local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
+
 function PatientModule.Init(State, Toggles)
     local self = setmetatable({}, PatientModule)
+
     self.State = State
     self.Toggles = Toggles
     self.Player = Players.LocalPlayer
-    
     self.PatientFolder = workspace:WaitForChild("Ignore"):WaitForChild("NPCs"):WaitForChild("Miscs")
-    
+
     -- Zone & Target Coordinates
     self.MIN_Y_HEIGHT = 140
     self.LOWER_ROOM_B_CFRAME = CFrame.new(1183.53284, 115.798248, -510.988892, 0, 1, 0, 1, 0, 0, 0, 0, -1)
     self.LOWER_ROOM_C_CFRAME = CFrame.new(1183.53284, 115.798248, -402.588745, 0, 1, 0, 1, 0, 0, 0, 0, -1)
     self.ROOM_SIZE = Vector3.new(50, 50, 50)
-    
+
     -- Execution Parameters
     self.MAX_INTERACT_RETRIES = 5
     self.CONFIRM_TIME = 0.5
@@ -54,7 +57,9 @@ function PatientModule.Init(State, Toggles)
 end
 
 function PatientModule:DPrint(...)
-    if self.DEBUG then print("[Patient Service]", ...) end
+    if self.DEBUG then
+        print("[Patient Service]", ...)
+    end
 end
 
 -- Helper Physics Utilities
@@ -104,14 +109,15 @@ end
 function PatientModule:IsInRoom(pos: Vector3, roomCFrame: CFrame): boolean
     local roomCenter = roomCFrame.Position
     local halfSize = self.ROOM_SIZE / 2
-    return math.abs(pos.X - roomCenter.X) <= halfSize.X and
-           math.abs(pos.Y - roomCenter.Y) <= halfSize.Y and
-           math.abs(pos.Z - roomCenter.Z) <= halfSize.Z
+    return math.abs(pos.X - roomCenter.X) <= halfSize.X
+       and math.abs(pos.Y - roomCenter.Y) <= halfSize.Y
+       and math.abs(pos.Z - roomCenter.Z) <= halfSize.Z
 end
 
 function PatientModule:NearestTop(fromPos: Vector3): Model?
     local best: Model? = nil
     local bestDist = math.huge
+
     for _, child in ipairs(self.PatientFolder:GetChildren()) do
         if child:IsA("Model") and child.Name == "Patient" then
             local pos = child:GetPivot().Position
@@ -130,6 +136,7 @@ end
 function PatientModule:NearestInRoom(fromPos: Vector3, roomCFrame: CFrame): Model?
     local best: Model? = nil
     local bestDist = math.huge
+
     for _, child in ipairs(self.PatientFolder:GetChildren()) do
         if child:IsA("Model") and child.Name == "Patient" then
             local pos = child:GetPivot().Position
@@ -163,7 +170,6 @@ function PatientModule:GetWishDirFromPath(root: BasePart, humanoid: Humanoid): (
         if typeof(wp) ~= "Vector3" and (wp :: PathWaypoint).Action == Enum.PathWaypointAction.Jump then
             humanoid.Jump = true
         end
-
         state.waypointIndex += 1
 
         if state.waypointIndex > #state.waypoints then
@@ -190,12 +196,17 @@ function PatientModule:StepMovement(root: BasePart, character: Model, wishDir: V
 
     self.MoveState.velocity = applyFriction(self.MoveState.velocity, isGrounded, self.FRICTION, self.STOP_SPEED, dt)
     self.MoveState.velocity = accel(self.MoveState.velocity, wishDir, wishSpeed, accelRate, dt)
-    root.AssemblyLinearVelocity = Vector3.new(self.MoveState.velocity.X, root.AssemblyLinearVelocity.Y, self.MoveState.velocity.Z)
+
+    root.AssemblyLinearVelocity = Vector3.new(
+        self.MoveState.velocity.X,
+        root.AssemblyLinearVelocity.Y,
+        self.MoveState.velocity.Z
+    )
 end
 
 function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePart, hum: Humanoid)
     self:DPrint("walkTo called, target =", tostring(targetPos), "isRetry =", tostring(isRetry))
-    
+
     local path = PathfindingService:CreatePath({
         AgentRadius = 2,
         AgentHeight = 5,
@@ -241,20 +252,7 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
             task.wait(0.1)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-
-            if holdingW and waited < 600 then
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-            end
-            task.wait(0.5)
-
-            if holdingW then
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-            end
             
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-            task.wait(6)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-
             if holdingW and waited < 600 and not self.MoveState.done and self.Running then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
             end
@@ -264,19 +262,23 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
     if holdingW then
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
     end
+
     self:DPrint("walkTo finished")
 end
 
 -- Interactions & Room Sequences
 function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: Humanoid)
     local retries = 0
-    while self.Running and self:GetPrompt(patient) do
+
+    while self.Running do
+        local prompt = self:GetPrompt(patient)
+        if not prompt then break end
+
         retries += 1
         self:DPrint(("Interacting with patient (Attempt %d): %s"):format(retries, patient:GetFullName()))
 
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-        task.wait(6)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        -- Direct interaction call replacing key inputs
+        fireproximityprompt(prompt)
 
         local elapsed = 0
         local cleared = false
@@ -326,6 +328,7 @@ function PatientModule:ProcessLowerRoom(roomName: string, roomCFrame: CFrame, hr
         if self.Running and self:GetPrompt(roomPatient) then
             self:InteractWithPatient(roomPatient, hrp, hum)
         end
+
         task.wait(0.1)
     end
 end
@@ -334,10 +337,7 @@ end
 function PatientModule:Start()
     if self.Running then return end
     self.Running = true
-
-    if self.State then
-        self.State.PatientActive = true
-    end
+    if self.State then self.State.PatientActive = true end
 
     local char = self.Player.Character or self.Player.CharacterAdded:Wait()
     local hum = char:WaitForChild("Humanoid") :: Humanoid
@@ -389,11 +389,13 @@ function PatientModule:Start()
 
                 foundTop = true
                 self:DPrint("Found top patient:", topPatient:GetFullName())
+
                 self:WalkTo(topPatient:GetPivot().Position, false, hrp, hum)
 
                 if self.Running and self:GetPrompt(topPatient) then
                     self:InteractWithPatient(topPatient, hrp, hum)
                 end
+
                 task.wait(0.1)
             end
 
@@ -413,6 +415,7 @@ function PatientModule:Start()
 
             task.wait(0.5)
         end
+
         self:DPrint("Patient servicing loop completed.")
     end)
 end
@@ -420,37 +423,16 @@ end
 function PatientModule:Stop()
     self.Running = false
     self.MoveState.done = true
-
-    if self.State then
-        self.State.PatientActive = false
-    end
+    if self.State then self.State.PatientActive = false end
 
     VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
 
-    if self.MoveConnection then
-        self.MoveConnection:Disconnect()
-        self.MoveConnection = nil
-    end
+    if self.MoveConnection then self.MoveConnection:Disconnect() self.MoveConnection = nil end
+    if self.CharConnection then self.CharConnection:Disconnect() self.CharConnection = nil end
+    if self.InputConnection then self.InputConnection:Disconnect() self.InputConnection = nil end
 
-    if self.CharConnection then
-        self.CharConnection:Disconnect()
-        self.CharConnection = nil
-    end
-
-    if self.InputConnection then
-        self.InputConnection:Disconnect()
-        self.InputConnection = nil
-    end
-
-    if self.TaskThread then
-        task.cancel(self.TaskThread)
-        self.TaskThread = nil
-    end
-
-    if self.AntiAFKThread then
-        task.cancel(self.AntiAFKThread)
-        self.AntiAFKThread = nil
-    end
+    if self.TaskThread then task.cancel(self.TaskThread) self.TaskThread = nil end
+    if self.AntiAFKThread then task.cancel(self.AntiAFKThread) self.AntiAFKThread = nil end
 end
 
 return PatientModule
