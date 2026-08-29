@@ -8,7 +8,6 @@ local RunService = game:GetService("RunService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local UserInputService = game:GetService("UserInputService")
 
--- Ensure compatibility with environments supporting fireproximityprompt
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
 
 function PatientModule.Init(State, Toggles)
@@ -34,8 +33,8 @@ function PatientModule.Init(State, Toggles)
     self.AIR_ACCEL = 2
     self.FRICTION = 6
     self.STOP_SPEED = 1.5
-    self.WAYPOINT_REACH_DIST = 1.5
-    self.FINAL_REACH_DIST = 2
+    self.WAYPOINT_REACH_DIST = 2.5 -- Increased to prevent overshooting corners
+    self.FINAL_REACH_DIST = 3.0    -- Increased clearance for final arrival
     self.DEBUG = true
 
     -- Internal Threading & Connections
@@ -62,7 +61,7 @@ function PatientModule:DPrint(...)
     end
 end
 
--- Helper Physics Utilities
+-- Helper Physics & Navigation Utilities
 local function grounded(character: Model, root: BasePart): (boolean, Vector3?)
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {character}
@@ -99,6 +98,17 @@ local function accel(velocity: Vector3, wishDir: Vector3, wishSpeed: number, acc
 
     local accelSpeed = math.min(accelRate * dt * wishSpeed, add)
     return velocity + wishDir * accelSpeed
+end
+
+-- Wall Line-of-Sight Check
+function PatientModule:HasDirectPath(startPos: Vector3, endPos: Vector3, character: Model): boolean
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {character, self.PatientFolder}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    local dir = endPos - startPos
+    local result = workspace:Raycast(startPos, dir, rayParams)
+    return result == nil
 end
 
 -- Spatial & Instance Utilities
@@ -207,10 +217,13 @@ end
 function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePart, hum: Humanoid)
     self:DPrint("walkTo called, target =", tostring(targetPos), "isRetry =", tostring(isRetry))
 
+    local char = hrp.Parent :: Model
+
     local path = PathfindingService:CreatePath({
-        AgentRadius = 2,
+        AgentRadius = 3.5, -- Increased radius to maintain distance from walls
         AgentHeight = 5,
         AgentCanJump = true,
+        WaypointSpacing = 4,
     })
 
     local ok, err = pcall(function()
@@ -222,10 +235,15 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         self:DPrint(("path computed, %d waypoints"):format(#wps))
         self.MoveState.waypoints = wps
     else
-        self:DPrint(("path FAILED (ok=%s status=%s err=%s), using straight-line fallback"):format(
-            tostring(ok), path and tostring(path.Status) or "nil", tostring(err)
-        ))
-        self.MoveState.waypoints = {targetPos}
+        -- Only use direct approach if there are NO walls between character and target
+        if self:HasDirectPath(hrp.Position, targetPos, char) then
+            self:DPrint("Path failed but direct path is clear of walls. Using fallback.")
+            self.MoveState.waypoints = {targetPos}
+        else
+            self:DPrint("Path FAILED and wall detected in direct line. Movement aborted to prevent wall walking.")
+            self.MoveState.done = true
+            return
+        end
     end
 
     self.MoveState.waypointIndex = 1
@@ -242,7 +260,7 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
         waited += 1
 
         if waited >= 600 and holdingW then
-            self:DPrint("Reached over 600 frames in motion; releasing W key to prevent collision.")
+            self:DPrint("Reached over 600 frames in motion; releasing W key.")
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
             holdingW = false
         end
@@ -252,7 +270,7 @@ function PatientModule:WalkTo(targetPos: Vector3, isRetry: boolean?, hrp: BasePa
             VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
             task.wait(0.1)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-            
+
             if holdingW and waited < 600 and not self.MoveState.done and self.Running then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
             end
@@ -277,7 +295,6 @@ function PatientModule:InteractWithPatient(patient: Model, hrp: BasePart, hum: H
         retries += 1
         self:DPrint(("Interacting with patient (Attempt %d): %s"):format(retries, patient:GetFullName()))
 
-        -- Direct interaction call replacing key inputs
         fireproximityprompt(prompt)
 
         local elapsed = 0
