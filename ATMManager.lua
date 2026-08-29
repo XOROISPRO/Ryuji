@@ -84,8 +84,16 @@ function ATMManager:Start()
                     self.IsProcessing = true
                     self:DPrint(string.format("Threshold MET! (%d >= %d). Initiating transition...", currentCash, self.TargetThreshold))
 
-                    -- 1. Pause PatientModule if it's running
-                    local patientWasActive = self.Toggles.PatientToggle and self.Toggles.PatientToggle.Value or false
+                   local patientWasActive = false
+
+                    -- Method 1: Check LinoriaLib toggle safely
+                    if self.Toggles and self.Toggles.PatientToggle then
+                        patientWasActive = self.Toggles.PatientToggle.Value
+                    -- Method 2: Fallback directly to PatientModule's running state
+                    elseif self.PatientModule and self.PatientModule.Running then
+                        patientWasActive = true
+                    end
+                    
                     if patientWasActive then
                         self:DPrint("PatientModule is active. Stopping PatientModule before starting ATM sequence...")
                         self.PatientModule:Stop()
