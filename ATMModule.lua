@@ -16,6 +16,21 @@ local firesignal = firesignal or function(signal)
 	end
 end
 
+-- Uses Roblox's native button:Activate()
+local function triggerGuiActivation(button: Instance)
+	if not button or not button:IsA("GuiButton") then return end
+	
+	-- Standard Roblox method
+	pcall(function()
+		(button :: GuiButton):Activate()
+	end)
+
+	-- Direct Activated signal backup for custom UI listeners
+	if firesignal and button.Activated then
+		firesignal(button.Activated)
+	end
+end
+
 function ATMModule.Init(State: any, Toggles: any, PathfindingModule: any)
 	local self = setmetatable({}, ATMModule)
 	self.State = State
@@ -35,14 +50,6 @@ end
 
 function ATMModule:DPrint(...)
 	if self.DEBUG then print("[ATM Service]", ...) end
-end
-
-local function clickGuiButton(button: Instance)
-	if not button then return end
-	if button:IsA("GuiButton") and firesignal then
-		firesignal(button.MouseButton1Click)
-		firesignal(button.Activated)
-	end
 end
 
 function ATMModule:FindTargetATM(): ClickDetector?
@@ -81,11 +88,11 @@ function ATMModule:ExecuteATMTransaction()
 	local amountBox = atmTab:WaitForChild("AmountBox") :: TextBox
 	amountBox.Text = "1000000"
 	task.wait(2)
-	clickGuiButton(atmTab:WaitForChild("Deposit"))
+	triggerGuiActivation(atmTab:WaitForChild("Deposit"))
 
 	-- 2. Switch to Transfer Tab
 	task.wait(2)
-	clickGuiButton(atmTab:WaitForChild("Transfer"))
+	triggerGuiActivation(atmTab:WaitForChild("Transfer"))
 
 	-- 3. Fill Details & Confirm
 	task.wait(2)
@@ -96,7 +103,7 @@ function ATMModule:ExecuteATMTransaction()
 	usernameBox.Text = "jotla13"
 	
 	task.wait(2)
-	clickGuiButton(transferFrame:WaitForChild("Confirm"))
+	triggerGuiActivation(transferFrame:WaitForChild("Confirm"))
 	self:DPrint("ATM Transfer Complete.")
 end
 
@@ -137,7 +144,6 @@ function ATMModule:Stop()
 		self.PathfindingModule:StopPathfinding()
 	end
 	
-	-- Only cancel thread if called externally (not from inside self.TaskThread)
 	if self.TaskThread and coroutine.running() ~= self.TaskThread then
 		task.cancel(self.TaskThread)
 		self.TaskThread = nil
