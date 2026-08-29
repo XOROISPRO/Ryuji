@@ -265,15 +265,15 @@ function JanitorModule:Start()
     self.AntiAFKThread = task.spawn(function()
         self:DPrint("Anti-AFK Loop Started.")
         while self.Running do
-            local ok, err = sendKeypress()
-            if ok then
-                self:DPrint("Anti-AFK keypress sent successfully.")
-            else
-                self:DPrint("Anti-AFK keypress failed:", err)
+            task.wait(180) -- Send every 3 minutes
+            if self.Running then
+                pcall(function()
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+                    task.wait(0.2)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+                end)
+                self:DPrint("Anti-AFK pulse sent.")
             end
-            
-            -- Wait 60 seconds before next keypress
-            task.wait(60)
         end
     end)
 
