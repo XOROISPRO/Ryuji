@@ -105,7 +105,7 @@ function PatientModule:InitializeSequence(): boolean
 	local playerGui = self.Player:WaitForChild("PlayerGui")
 	local optionsFolder = playerGui:WaitForChild("HUD"):WaitForChild("Main"):WaitForChild("Dialogue"):WaitForChild("Options")
 	local optionOne = optionsFolder:WaitForChild("1", 5)
-
+	task.wait(4)
 	if optionOne then
 		triggerGuiActivation(optionOne)
 		self:DPrint("Successfully activated Makima dialogue (Option 1).")
