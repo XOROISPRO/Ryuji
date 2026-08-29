@@ -6,6 +6,17 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 
 local fireproximityprompt = fireproximityprompt or fire_proximity_prompt
+local firesignal = firesignal or function(signal)
+	if getconnections then
+		for _, connection in ipairs(getconnections(signal)) do
+			if connection.Fire then
+				connection:Fire()
+			elseif connection.Function then
+				connection.Function()
+			end
+		end
+	end
+end
 
 function PatientModule.Init(State: any, Toggles: any, PathfindingModule: any)
 	local self = setmetatable({}, PatientModule)
@@ -14,6 +25,10 @@ function PatientModule.Init(State: any, Toggles: any, PathfindingModule: any)
 	self.PathfindingModule = PathfindingModule
 	self.Player = Players.LocalPlayer
 	self.PatientFolder = workspace:WaitForChild("Ignore"):WaitForChild("NPCs"):WaitForChild("Miscs")
+
+	-- Initializer Target CFrame & NPC path
+	self.MAKIMA_CFRAME = CFrame.new(1103.79236, 113.375603, -510.34433, 0.695824087, 3.35096617e-09, 0.718212247, 3.30012406e-10, 1, -4.98542985e-09, -0.718212247, 3.70600106e-09, 0.695824087)
+	self.IMPORTANT_NPCS = workspace:WaitForChild("Ignore"):WaitForChild("NPCs"):WaitForChild("Important NPCs")
 
 	self.MIN_Y_HEIGHT = 140
 	self.LOWER_ROOM_B_CFRAME = CFrame.new(1183.53284, 115.798248, -510.988892, 0, 1, 0, 1, 0, 0, 0, 0, -1)
@@ -35,6 +50,55 @@ end
 
 function PatientModule:DPrint(...)
 	if self.DEBUG then print("[Patient Service]", ...) end
+end
+
+-- 1. Handles moving to Makima, opening dialogue, and choosing Option 1
+function PatientModule:InitializeSequence(): boolean
+	self:DPrint("Running Makima Initializer Sequence...")
+	
+	-- Walk to Makima CFrame
+	local arrived = self.PathfindingModule:WalkTo(self.MAKIMA_CFRAME)
+	if not arrived or not self.Running then return false end
+
+	-- Find DialogueProx inside Makima
+	local makima = self.IMPORTANT_NPCS:FindFirstChild("Makima")
+	local dialogueProx: ProximityPrompt? = nil
+
+	if makima then
+		for _, descendant in ipairs(makima:GetDescendants()) do
+			if descendant.Name == "DialogueProx" and descendant:IsA("ProximityPrompt") then
+				dialogueProx = descendant
+				break
+			end
+		end
+	end
+
+	if not dialogueProx then
+		self:DPrint("Failed to locate DialogueProx inside Makima!")
+		return false
+	end
+
+	-- Trigger dialogue prompt
+	fireproximityprompt(dialogueProx)
+	task.wait(1.5)
+
+	-- Fire Option 1 in HUD Dialogue
+	local playerGui = self.Player:WaitForChild("PlayerGui")
+	local optionsFolder = playerGui:WaitForChild("HUD"):WaitForChild("Main"):WaitForChild("Dialogue"):WaitForChild("Options")
+	local optionOne = optionsFolder:WaitForChild("1", 5)
+
+	if optionOne then
+		if optionOne:IsA("GuiButton") and firesignal then
+			firesignal(optionOne.MouseButton1Click)
+			firesignal(optionOne.Activated)
+		end
+		self:DPrint("Successfully initiated Makima dialogue (Option 1).")
+		task.wait(1.5)
+		return true
+	else
+		self:DPrint("Option '1' button not found in UI!")
+		return false
+	end
 end
 
 function PatientModule:GetPrompt(patient: Instance): ProximityPrompt?
@@ -144,12 +208,16 @@ function PatientModule:Start()
 	end)
 
 	self.TaskThread = task.spawn(function()
+		-- Always execute initialization before servicing patients
+		local initOk = self:InitializeSequence()
+		if not initOk or not self.Running then return end
+
 		while self.Running do
 			local char = self.Player.Character
 			local hrp = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 			if hrp then
-				-- 1. Top Area Patients
+				-- Top Area Patients
 				while self.Running do
 					local topPatient = self:NearestTop(hrp.Position)
 					if not topPatient then break end
@@ -161,7 +229,7 @@ function PatientModule:Start()
 					task.wait(0.1)
 				end
 
-				-- 2. Lower Rooms
+				-- Lower Rooms
 				if self.Running then self:ProcessLowerRoom("Bottom B", self.LOWER_ROOM_B_CFRAME) end
 				if self.Running then self:ProcessLowerRoom("Bottom C", self.LOWER_ROOM_C_CFRAME) end
 				if self.Running then self:ProcessLowerRoom("Bottom D", self.LOWER_ROOM_D_CFRAME) end
@@ -181,7 +249,7 @@ function PatientModule:Stop()
 		self.InputConnection = nil
 	end
 
-	if self.TaskThread then
+	if self.TaskThread and coroutine.running() ~= self.TaskThread then
 		task.cancel(self.TaskThread)
 		self.TaskThread = nil
 	end
