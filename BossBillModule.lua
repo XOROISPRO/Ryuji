@@ -2,37 +2,35 @@ local BossBillModule = {}
 BossBillModule.__index = BossBillModule
 
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
 
 function BossBillModule.Init(State, Toggles)
     local self = setmetatable({}, BossBillModule)
     self.State = State
     self.Toggles = Toggles
-    self.Connection = nil
-    self.CreatedGui = nil
+    self.IsRunning = false
+    self.CreatedLabel = nil
     return self
 end
 
-local function applyBossUI(bossModel)
-    -- Locate target part to attach GUI (HumanoidRootPart, Head, or PrimaryPart)
-    local targetPart = bossModel:FindFirstChild("HumanoidRootPart") 
-        or bossModel:FindFirstChild("Head") 
-        or bossModel.PrimaryPart
+local function applyBossUI(bossObject, self)
+    -- Handle case where BossBill IS the BillboardGui itself
+    local billboard = nil
+    
+    if bossObject:IsA("BillboardGui") then
+        billboard = bossObject
+    else
+        billboard = bossObject:FindFirstChildOfClass("BillboardGui")
+    end
 
-    if not targetPart then return nil end
+    if not billboard then return end
 
-    -- Check for existing custom GUI or create a new BillboardGui
-    local billboard = targetPart:FindFirstChild("BossBillDisplay")
-    if not billboard then
-        billboard = Instance.new("BillboardGui")
-        billboard.Name = "BossBillDisplay"
-        billboard.AlwaysOnTop = true
-        billboard.MaxDistance = 1000000
-        billboard.Size = UDim2.new(4, 0, 1, 0)
-        billboard.StudsOffset = Vector3.new(0, 3, 0)
-        billboard.Parent = targetPart
+    -- Update max distance on target BillboardGui
+    billboard.MaxDistance = 1000000
 
-        local textLabel = Instance.new("TextLabel")
+    -- Add or update the custom TextLabel inside the BillboardGui
+    local textLabel = billboard:FindFirstChild("BossLabel")
+    if not textLabel then
+        textLabel = Instance.new("TextLabel")
         textLabel.Name = "BossLabel"
         textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
         textLabel.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -42,40 +40,41 @@ local function applyBossUI(bossModel)
         textLabel.TextScaled = true
         textLabel.Font = Enum.Font.SourceSansBold
         
-        -- Set text to bossModel.Name ("BossBill")
-        textLabel.Text = bossModel.Name
+        -- Parent.Name displays the container holding the BillboardGui
+        textLabel.Text = bossObject.Parent and bossObject.Parent.Name or bossObject.Name
         textLabel.Parent = billboard
+        self.CreatedLabel = textLabel
     else
-        billboard.MaxDistance = 1000000
+        textLabel.Text = bossObject.Parent and bossObject.Parent.Name or bossObject.Name
     end
-
-    return billboard
 end
 
 function BossBillModule:Start()
-    if self.Connection then return end
+    if self.IsRunning then return end
+    self.IsRunning = true
 
-    self.Connection = RunService.Heartbeat:Connect(function()
-        local boss = Workspace:FindFirstChild("LivingBeings")
-            and Workspace.LivingBeings:FindFirstChild("Mobs")
-            and Workspace.LivingBeings.Mobs:FindFirstChild("Pickle")
-            and Workspace.LivingBeings.Mobs.Pickle:FindFirstChild("BossBill")
+    task.spawn(function()
+        while self.IsRunning do
+            local boss = Workspace:FindFirstChild("LivingBeings")
+                and Workspace.LivingBeings:FindFirstChild("Mobs")
+                and Workspace.LivingBeings.Mobs:FindFirstChild("Pickle")
+                and Workspace.LivingBeings.Mobs.Pickle:FindFirstChild("BossBill")
 
-        if boss then
-            self.CreatedGui = applyBossUI(boss)
+            if boss then
+                applyBossUI(boss, self)
+            end
+
+            task.wait(1) -- Throttle updates to run once every second
         end
     end)
 end
 
 function BossBillModule:Stop()
-    if self.Connection then
-        self.Connection:Disconnect()
-        self.Connection = nil
-    end
+    self.IsRunning = false
 
-    if self.CreatedGui then
-        self.CreatedGui:Destroy()
-        self.CreatedGui = nil
+    if self.CreatedLabel then
+        self.CreatedLabel:Destroy()
+        self.CreatedLabel = nil
     end
 end
 
