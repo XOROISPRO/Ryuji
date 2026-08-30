@@ -2,7 +2,6 @@ local BossBillModule = {}
 BossBillModule.__index = BossBillModule
 
 local Workspace = game:GetService("Workspace")
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 function BossBillModule.Init(State, Toggles)
@@ -10,7 +9,6 @@ function BossBillModule.Init(State, Toggles)
     self.State = State
     self.Toggles = Toggles
     self.Connection = nil
-    self.CurrentBoss = nil
     self.CreatedGui = nil
     return self
 end
@@ -44,8 +42,8 @@ local function applyBossUI(bossModel)
         textLabel.TextScaled = true
         textLabel.Font = Enum.Font.SourceSansBold
         
-        -- Text set to Parent.Name (BossBill or whatever parent model contains it)
-        textLabel.Text = bossModel.Parent and bossModel.Parent.Name or bossModel.Name
+        -- Set text to bossModel.Name ("BossBill")
+        textLabel.Text = bossModel.Name
         textLabel.Parent = billboard
     else
         billboard.MaxDistance = 1000000
@@ -58,16 +56,13 @@ function BossBillModule:Start()
     if self.Connection then return end
 
     self.Connection = RunService.Heartbeat:Connect(function()
-        local pickleFolder = Workspace:FindFirstChild("LivingBeings")
+        local boss = Workspace:FindFirstChild("LivingBeings")
             and Workspace.LivingBeings:FindFirstChild("Mobs")
             and Workspace.LivingBeings.Mobs:FindFirstChild("Pickle")
+            and Workspace.LivingBeings.Mobs.Pickle:FindFirstChild("BossBill")
 
-        if pickleFolder then
-            local boss = pickleFolder:FindFirstChild("BossBill")
-            if boss then
-                self.CurrentBoss = boss
-                self.CreatedGui = applyBossUI(boss)
-            end
+        if boss then
+            self.CreatedGui = applyBossUI(boss)
         end
     end)
 end
@@ -82,7 +77,6 @@ function BossBillModule:Stop()
         self.CreatedGui:Destroy()
         self.CreatedGui = nil
     end
-    self.CurrentBoss = nil
 end
 
 return BossBillModule
